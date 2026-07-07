@@ -136,13 +136,29 @@ class ExperimentRepo:
         status: str,
         config: dict[str, Any],
         design_summary: dict[str, Any] | None = None,
+        created_at: datetime | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        archived_at: datetime | None = None,
     ) -> Experiment:
+        """created_at/started_at/completed_at/archived_at — обычно проставляются
+        БД (server_default/update_status); явные значения нужны только для
+        импорта легаси-экспериментов (DOCKER.md §9), чтобы сохранить настоящую
+        историю статусов, а не создать новую с текущим временем."""
         with session_scope() as s:
             if s.scalar(select(Experiment).where(Experiment.name == name)) is not None:
                 raise RepoError(f"Эксперимент с именем '{name}' уже существует")
             exp = Experiment(
                 name=name, owner_id=owner_id, status=status, config=config, design_summary=design_summary
             )
+            if created_at is not None:
+                exp.created_at = created_at
+            if started_at is not None:
+                exp.started_at = started_at
+            if completed_at is not None:
+                exp.completed_at = completed_at
+            if archived_at is not None:
+                exp.archived_at = archived_at
             s.add(exp)
             s.flush()
             s.refresh(exp)

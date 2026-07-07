@@ -19,6 +19,7 @@ services:
       ABKIT_ADMIN_NAME: ${ABKIT_ADMIN_NAME:-Admin}
     volumes:
       - abkit_data:/data/experiments
+      # - ./legacy_experiments:/import:ro  # для `abkit-admin import-legacy --dir /import --owner ...` (DOCKER.md §9)
     depends_on:
       postgres:
         condition: service_healthy

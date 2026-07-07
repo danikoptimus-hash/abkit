@@ -159,3 +159,79 @@ def test_experiments_tab_history_and_admin_audit_show_design_event(db_url, tmp_p
     audit_dfs = admin_tab.dataframe
     all_actions = pd.concat([df.value["действие"] for df in audit_dfs if "действие" in df.value.columns])
     assert "experiment.create" in all_actions.values
+
+
+def test_imported_legacy_experiment_visible_in_ui_with_status_and_report(db_url, tmp_path, monkeypatch):
+    """Критерий готовности этапа D5 (DOCKER.md §12): "эксперименты видны в UI
+    со статусами и отчетами" после import-legacy."""
+    import numpy as np
+
+    from abkit.config import DesignConfig, MetricConfig
+    from abkit.db.import_legacy import import_legacy_dir
+    from abkit.db.repositories import UserRepo
+    from abkit.experiment import Experiment
+
+    # строим настоящий файловый (легаси) эксперимент с анализом и отчетом
+    legacy_dir = tmp_path / "legacy_source"
+    rng = np.random.default_rng(0)
+    n = 200
+    data = pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(n)],
+            "revenue": rng.normal(100, 20, size=n),
+        }
+    )
+    config = DesignConfig(
+        name="imported_exp",
+        unit_col="user_id",
+        groups={"control": 0.5, "treatment": 0.5},
+        metrics=[MetricConfig(name="revenue", type="continuous")],
+        sample_size=n,
+        split_method="simple",
+        seed=1,
+    )
+    legacy_experiment = Experiment.design(config, data, experiments_dir=legacy_dir)
+    post_data = pd.DataFrame(
+        {
+            "user_id": legacy_experiment.assignments["unit_id"],
+            "revenue": rng.normal(100, 20, size=n),
+        }
+    )
+    legacy_experiment.analyze(post_data).report()
+
+    monkeypatch.setenv("ABKIT_MODE", "db")
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    monkeypatch.setenv("ABKIT_SECRET_KEY", "a-real-generated-secret-for-import-ui-test")
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path / "server_data"))
+
+    UserRepo().create(
+        email="importadmin@co.com", name="ImportAdmin", password_hash=hash_password("pw12345"), role="admin"
+    )
+    result = import_legacy_dir(legacy_dir, "importadmin@co.com")
+    assert result.imported == ["imported_exp"]
+
+    at = AppTest.from_file("app.py")
+    at.run(timeout=30)
+    next(ti for ti in at.text_input if ti.label == "Email").set_value("importadmin@co.com")
+    next(ti for ti in at.text_input if ti.label == "Пароль").set_value("pw12345")
+    at.button[0].click().run(timeout=30)
+    assert not at.exception
+
+    experiments_tab = at.tabs[2]
+    registry_dfs = experiments_tab.dataframe
+    assert len(registry_dfs) >= 1
+    registry_df = registry_dfs[0].value
+    assert "imported_exp" in registry_df["эксперимент"].values
+    row = registry_df[registry_df["эксперимент"] == "imported_exp"].iloc[0]
+    assert row["status"] == "designed"
+
+    exp_select = next(s for s in experiments_tab.selectbox if s.key == "exp_status_select")
+    exp_select.set_value("imported_exp").run(timeout=30)
+    experiments_tab = at.tabs[2]
+    assert not at.exception
+
+    report_radio = next(r for r in experiments_tab.radio if r.key == "exp_report_choice")
+    report_radio.set_value("report.html").run(timeout=30)
+    experiments_tab = at.tabs[2]
+    assert not at.exception
+    assert not any("еще не создан" in i.value for i in experiments_tab.info)

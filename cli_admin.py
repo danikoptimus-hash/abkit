@@ -103,5 +103,38 @@ def list_users() -> None:
     console.print(table)
 
 
+@app.command("import-legacy")
+def import_legacy(
+    dir: str = typer.Option(..., "--dir", help="Папка со старым файловым реестром (registry.json + эксперименты)"),
+    owner: str = typer.Option(..., "--owner", help="Email существующего пользователя — владелец импортированных экспериментов"),
+) -> None:
+    """Импорт файлового (легаси) реестра экспериментов в серверный режим —
+    DOCKER.md §9. Идемпотентна: повторный запуск не дублирует уже
+    импортированные (по имени) эксперименты."""
+    from pathlib import Path
+
+    from abkit.db.import_legacy import LegacyImportError, import_legacy_dir
+
+    try:
+        result = import_legacy_dir(Path(dir), owner)
+    except LegacyImportError as e:
+        console.print(f"[red]Ошибка:[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if result.imported:
+        console.print(f"[green]Импортировано ({len(result.imported)}):[/green] {', '.join(result.imported)}")
+    if result.skipped_existing:
+        console.print(
+            f"[yellow]Уже были импортированы, пропущены ({len(result.skipped_existing)}):[/yellow] "
+            f"{', '.join(result.skipped_existing)}"
+        )
+    if result.failed:
+        console.print(f"[red]Ошибки ({len(result.failed)}):[/red]")
+        for name, err in result.failed.items():
+            console.print(f"  {name}: {err}")
+    if not result.imported and not result.skipped_existing and not result.failed:
+        console.print("Экспериментов для импорта не найдено (registry.json пуст?).")
+
+
 if __name__ == "__main__":
     app()

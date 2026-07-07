@@ -172,6 +172,19 @@ class TestResult:
 
 ## 6. Хранение: форматы файлов
 
+Это описание — **lite-режим** (`ABKIT_MODE=file`, дефолт): локальный
+однопользовательский инструмент без Docker/БД, тот, что реализован этапами
+1-7 этого документа. Начиная с `DOCKER.md` есть второй, серверный режим
+(`ABKIT_MODE=db`) — та же библиотека и Streamlit-приложение, но данные
+(users/experiments/assignments/datasets/analysis_results/audit_log) живут в
+Postgres, а не в файлах; выбор режима — через `abkit/experiment_store.py`
+(`get_experiment_store()`, диспетчер по `ABKIT_MODE`), само хранилище — через
+`abkit/db/` (репозитории, модели, Alembic-миграции). Оба режима используют
+один и тот же `Experiment.design()/.load()/.analyze()` — статистическая
+логика и форматы отчетов (report.html/results.json) не зависят от режима
+хранения. Подробности серверного режима (роли, аутентификация, Docker,
+аудит-лог) — см. `DOCKER.md`, этот раздел ниже описывает только lite-режим.
+
 ```
 experiments/
 ├── registry.json
