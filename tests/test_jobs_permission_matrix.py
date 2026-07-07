@@ -18,7 +18,11 @@ from abkit.config import DesignConfig, MetricConfig
 @pytest.fixture
 def db_env(db_url, tmp_path, monkeypatch):
     monkeypatch.setenv("ABKIT_MODE", "db")
-    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path / "data"))
+    # isolation.apply_isolation() в файловом плече читает registry.json по
+    # ABKIT_EXPERIMENTS_DIR независимо от ABKIT_MODE — без изоляции тесты бы
+    # зависели от того, что реально лежит в ~/ab_experiments на этой машине.
+    monkeypatch.setenv("ABKIT_EXPERIMENTS_DIR", str(tmp_path / "file_side"))
     yield
 
 

@@ -3,6 +3,7 @@
 по-прежнему не показывает логин-экран вообще — см. tests/test_app.py, там
 current_user всегда None и поведение не изменилось."""
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from abkit.auth.passwords import hash_password
@@ -124,3 +125,37 @@ def test_admin_sees_admin_tab_editor_does_not(db_url, tmp_path, monkeypatch):
     assert len(at.tabs) == 5  # + Admin
     admin_tab = at.tabs[4]
     assert any("Администрирование" in h.value for h in admin_tab.header)
+
+
+def test_experiments_tab_history_and_admin_audit_show_design_event(db_url, tmp_path, monkeypatch):
+    """DOCKER.md §6.2: «История» — события эксперимента видны любой роли;
+    «Аудит» у Admin — общий список событий."""
+    from abkit.db.repositories import UserRepo
+
+    UserRepo().create(
+        email="admin3@co.com", name="Admin3", password_hash=hash_password("pw12345"), role="admin"
+    )
+    at = _fresh_db_app(db_url, tmp_path, monkeypatch)
+
+    next(ti for ti in at.text_input if ti.label == "Email").set_value("admin3@co.com")
+    next(ti for ti in at.text_input if ti.label == "Пароль").set_value("pw12345")
+    at.button[0].click().run(timeout=30)
+
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "демо-данные" in b.label).click().run(timeout=30)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "Спроектировать" in b.label).click().run(timeout=30)
+    assert not at.exception
+
+    experiments_tab = at.tabs[2]
+    history_expanders = [e for e in experiments_tab.expander if e.label == "История"]
+    assert len(history_expanders) == 1
+    history_dfs = history_expanders[0].dataframe
+    assert len(history_dfs) == 1
+    assert "experiment.create" in history_dfs[0].value["действие"].values
+
+    admin_tab = at.tabs[4]
+    assert any("Аудит" in s.value for s in admin_tab.subheader)
+    audit_dfs = admin_tab.dataframe
+    all_actions = pd.concat([df.value["действие"] for df in audit_dfs if "действие" in df.value.columns])
+    assert "experiment.create" in all_actions.values

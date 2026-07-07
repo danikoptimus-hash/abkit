@@ -233,7 +233,11 @@ def test_login_deactivated_user_raises(auth_env):
     UserRepo().create(
         email="blocked@co.com", name="Bl", password_hash=hash_password("pw"), role="viewer"
     )
-    admin_set_active(_user("admin", "admin-id"), target_email="blocked@co.com", is_active=False)
+    admin_id = UserRepo().create(
+        email="realadmin@co.com", name="RA", password_hash=hash_password("adminpw"), role="admin"
+    )
+    admin = CurrentUser(id=str(admin_id), email="realadmin@co.com", name="RA", role="admin")
+    admin_set_active(admin, target_email="blocked@co.com", is_active=False)
 
     with pytest.raises(AuthError, match="заблокирован"):
         login("blocked@co.com", "pw")

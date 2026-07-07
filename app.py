@@ -1141,6 +1141,33 @@ def render_analyze_tab(experiments_dir: Path, current_user: CurrentUser | None =
 # --------------------------------------------------------------------------
 
 
+def _audit_log_to_df(entries: list) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "время": e.ts.strftime("%Y-%m-%d %H:%M:%S") if e.ts else "-",
+                "действие": e.action,
+                "пользователь": e.user_email or "-",
+                "объект": e.object_name or "-",
+                "детали": e.details or {},
+            }
+            for e in entries
+        ]
+    )
+
+
+def _render_audit_history(exp_name: str) -> None:
+    """DOCKER.md §6.2: события ЭТОГО эксперимента, видна ЛЮБОЙ роли (не только
+    Admin) — в отличие от общей страницы «Аудит»."""
+    from abkit.db.repositories import AuditRepo
+
+    entries = AuditRepo().list_recent(object_name=exp_name, limit=200)
+    if not entries:
+        st.caption("Событий пока нет.")
+        return
+    st.dataframe(_audit_log_to_df(entries), hide_index=True)
+
+
 def render_experiments_tab(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
     st.header("Реестр экспериментов")
     status_filter = st.selectbox(
@@ -1201,6 +1228,11 @@ def render_experiments_tab(experiments_dir: Path, current_user: CurrentUser | No
                 else:
                     st.success(f"«{exp_name}» удален.")
                     st.rerun()
+
+    if current_user is not None:
+        st.divider()
+        with st.expander("История"):
+            _render_audit_history(exp_name)
 
     st.divider()
     st.subheader("Отчеты")
@@ -1448,6 +1480,58 @@ def render_admin_tab(current_user: CurrentUser | None) -> None:
         else:
             st.success(f"Пароль «{reset_email}» сброшен.")
             st.info(f"Временный пароль (сохраните — показывается один раз): `{generated}`")
+
+    st.divider()
+    st.subheader("Аудит")
+    from datetime import datetime, time as dt_time
+
+    from abkit.db.repositories import AuditRepo
+
+    col1, col2 = st.columns(2)
+    filter_email = col1.selectbox("Пользователь", ["(все)"] + emails, key="admin_audit_user")
+    filter_action = col2.text_input(
+        "Действие (например experiment.create)", key="admin_audit_action"
+    )
+    col3, col4, col5 = st.columns(3)
+    filter_date_from = col3.date_input("С даты", value=None, key="admin_audit_date_from")
+    filter_date_to = col4.date_input("По дату", value=None, key="admin_audit_date_to")
+    page_size = col5.number_input(
+        "Строк на странице", min_value=10, max_value=500, value=50, step=10, key="admin_audit_page_size"
+    )
+
+    user_id_filter = None
+    if filter_email != "(все)":
+        matched = next((u for u in users if u.email == filter_email), None)
+        user_id_filter = matched.id if matched else None
+    date_from = datetime.combine(filter_date_from, dt_time.min) if filter_date_from else None
+    date_to = datetime.combine(filter_date_to, dt_time.max) if filter_date_to else None
+
+    audit_repo = AuditRepo()
+    total = audit_repo.count(
+        user_id=user_id_filter, action=filter_action or None, date_from=date_from, date_to=date_to
+    )
+    page_size_int = int(page_size)
+    total_pages = max(1, (total + page_size_int - 1) // page_size_int)
+    st.session_state.setdefault("admin_audit_page", 0)
+    st.session_state.admin_audit_page = min(st.session_state.admin_audit_page, total_pages - 1)
+
+    col_prev, col_info, col_next = st.columns([1, 2, 1])
+    if col_prev.button("← Назад", disabled=st.session_state.admin_audit_page == 0):
+        st.session_state.admin_audit_page -= 1
+        st.rerun()
+    col_info.write(f"Страница {st.session_state.admin_audit_page + 1} из {total_pages} (всего {total})")
+    if col_next.button("Вперед →", disabled=st.session_state.admin_audit_page >= total_pages - 1):
+        st.session_state.admin_audit_page += 1
+        st.rerun()
+
+    entries = audit_repo.list_recent(
+        user_id=user_id_filter, action=filter_action or None, date_from=date_from, date_to=date_to,
+        limit=page_size_int, offset=st.session_state.admin_audit_page * page_size_int,
+    )
+    if not entries:
+        st.info("Событий не найдено.")
+    else:
+        st.dataframe(_audit_log_to_df(entries), hide_index=True)
 
 
 # --------------------------------------------------------------------------

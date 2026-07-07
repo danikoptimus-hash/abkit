@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 
 from abkit import storage
 from abkit.db.engine import session_scope
@@ -344,20 +344,55 @@ class AuditRepo:
             )
             s.add(entry)
 
+    def _filtered(self, stmt, *, user_id, action, object_name, date_from, date_to):
+        if user_id is not None:
+            stmt = stmt.where(AuditLog.user_id == user_id)
+        if action is not None:
+            stmt = stmt.where(AuditLog.action == action)
+        if object_name is not None:
+            stmt = stmt.where(AuditLog.object_name == object_name)
+        if date_from is not None:
+            stmt = stmt.where(AuditLog.ts >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(AuditLog.ts <= date_to)
+        return stmt
+
     def list_recent(
         self,
         *,
         limit: int = 100,
+        offset: int = 0,
         user_id: uuid_mod.UUID | None = None,
         action: str | None = None,
+        object_name: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> list[AuditLog]:
         with session_scope() as s:
-            stmt = select(AuditLog).order_by(AuditLog.ts.desc()).limit(limit)
-            if user_id is not None:
-                stmt = stmt.where(AuditLog.user_id == user_id)
-            if action is not None:
-                stmt = stmt.where(AuditLog.action == action)
+            stmt = select(AuditLog).order_by(AuditLog.ts.desc(), AuditLog.id.desc())
+            stmt = self._filtered(
+                stmt, user_id=user_id, action=action, object_name=object_name,
+                date_from=date_from, date_to=date_to,
+            )
+            stmt = stmt.offset(offset).limit(limit)
             rows = list(s.scalars(stmt))
             for r in rows:
                 s.expunge(r)
             return rows
+
+    def count(
+        self,
+        *,
+        user_id: uuid_mod.UUID | None = None,
+        action: str | None = None,
+        object_name: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+    ) -> int:
+        with session_scope() as s:
+            stmt = select(func.count()).select_from(AuditLog)
+            stmt = self._filtered(
+                stmt, user_id=user_id, action=action, object_name=object_name,
+                date_from=date_from, date_to=date_to,
+            )
+            return s.scalar(stmt) or 0

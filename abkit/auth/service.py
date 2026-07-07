@@ -15,10 +15,37 @@ from abkit.db.repositories import UserRepo
 
 _MAX_LOGIN_ATTEMPTS = 5
 _LOCKOUT_MINUTES = 15
+_CLI_ACTOR_EMAIL = "cli:abkit-admin"
 
 
 def _session_lifetime_hours() -> float:
     return float(os.environ.get("ABKIT_SESSION_LIFETIME_HOURS", "72"))
+
+
+def _audit(
+    *,
+    action: str,
+    user_id: uuid_mod.UUID | None = None,
+    user_email: str | None = None,
+    object_type: str | None = None,
+    object_id: str | None = None,
+    object_name: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """Пишется на уровне сервисной функции (не UI), чтобы CLI-действия тоже
+    попадали в аудит (DOCKER.md §6.2) — в т.ч. когда acting_user=None
+    (доверенный abkit-admin), тогда user_id=None, user_email='cli:abkit-admin'."""
+    from abkit.db.repositories import AuditRepo
+
+    AuditRepo().log(
+        action=action,
+        user_id=user_id,
+        user_email=user_email,
+        object_type=object_type,
+        object_id=object_id,
+        object_name=object_name,
+        details=details,
+    )
 
 
 def login(email: str, password: str) -> str:
@@ -31,22 +58,36 @@ def login(email: str, password: str) -> str:
     repo = UserRepo()
     user = repo.get_by_email(email)
     if user is None:
+        _audit(action="auth.login_failed", user_email=email, details={"reason": "unknown_email"})
         raise AuthError("Неверный email или пароль")
 
     if user.locked_until is not None and user.locked_until > datetime.now(timezone.utc):
+        _audit(
+            action="auth.login_failed", user_id=user.id, user_email=email,
+            details={"reason": "locked_out"},
+        )
         raise AuthError(
             f"Слишком много неудачных попыток входа. Повторите после "
             f"{user.locked_until.strftime('%H:%M UTC')}"
         )
 
     if not user.is_active:
+        _audit(
+            action="auth.login_failed", user_id=user.id, user_email=email,
+            details={"reason": "inactive"},
+        )
         raise AuthError("Учетная запись заблокирована администратором")
 
     if not verify_password(password, user.password_hash):
         repo.record_login_failure(email, max_attempts=_MAX_LOGIN_ATTEMPTS, lockout_minutes=_LOCKOUT_MINUTES)
+        _audit(
+            action="auth.login_failed", user_id=user.id, user_email=email,
+            details={"reason": "wrong_password"},
+        )
         raise AuthError("Неверный email или пароль")
 
     repo.record_login_success(user.id)
+    _audit(action="auth.login", user_id=user.id, user_email=user.email)
     return create_session_token(
         user_id=str(user.id),
         email=user.email,
@@ -114,6 +155,13 @@ def admin_create_user(
         role=role,
         must_change_password=password is None,
     )
+    _audit(
+        action="user.create",
+        user_id=uuid_mod.UUID(acting_user.id) if acting_user is not None else None,
+        user_email=acting_user.email if acting_user is not None else _CLI_ACTOR_EMAIL,
+        object_type="user", object_id=str(user_id), object_name=email,
+        details={"role": role},
+    )
     return str(user_id), generated
 
 
@@ -127,6 +175,12 @@ def admin_reset_password(
         raise AuthError(f"Пользователь '{target_email}' не найден")
     generated = new_password or _generate_temp_password()
     UserRepo().set_password_hash(user.id, hash_password(generated), must_change_password=True)
+    _audit(
+        action="user.password_reset",
+        user_id=uuid_mod.UUID(acting_user.id) if acting_user is not None else None,
+        user_email=acting_user.email if acting_user is not None else _CLI_ACTOR_EMAIL,
+        object_type="user", object_id=str(user.id), object_name=target_email,
+    )
     return generated
 
 
@@ -135,7 +189,13 @@ def admin_set_role(acting_user: CurrentUser, *, target_email: str, role: str) ->
     user = UserRepo().get_by_email(target_email)
     if user is None:
         raise AuthError(f"Пользователь '{target_email}' не найден")
+    old_role = user.role
     UserRepo().update_role(user.id, role)
+    _audit(
+        action="user.role_change", user_id=uuid_mod.UUID(acting_user.id), user_email=acting_user.email,
+        object_type="user", object_id=str(user.id), object_name=target_email,
+        details={"from": old_role, "to": role},
+    )
 
 
 def admin_set_active(acting_user: CurrentUser, *, target_email: str, is_active: bool) -> None:
@@ -144,6 +204,11 @@ def admin_set_active(acting_user: CurrentUser, *, target_email: str, is_active: 
     if user is None:
         raise AuthError(f"Пользователь '{target_email}' не найден")
     UserRepo().set_active(user.id, is_active)
+    _audit(
+        action="user.active_change", user_id=uuid_mod.UUID(acting_user.id), user_email=acting_user.email,
+        object_type="user", object_id=str(user.id), object_name=target_email,
+        details={"is_active": is_active},
+    )
 
 
 def self_register(*, email: str, name: str, password: str) -> str:
@@ -152,4 +217,9 @@ def self_register(*, email: str, name: str, password: str) -> str:
     if os.environ.get("ABKIT_ALLOW_SELF_REGISTRATION", "false").lower() != "true":
         raise AuthError("Самостоятельная регистрация отключена")
     user_id = UserRepo().create(email=email, name=name, password_hash=hash_password(password), role="viewer")
+    _audit(
+        action="user.create", user_id=user_id, user_email=email,
+        object_type="user", object_id=str(user_id), object_name=email,
+        details={"role": "viewer", "self_registered": True},
+    )
     return str(user_id)
