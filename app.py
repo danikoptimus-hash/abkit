@@ -15,6 +15,7 @@ import streamlit as st
 from pydantic import ValidationError
 
 from abkit import checks, storage
+from abkit.auth.guards import AuthError, CurrentUser
 from abkit.config import DesignConfig, MetricConfig
 from abkit.demo_data import generate_demo_design_data, generate_demo_post_data, make_demo_design_config
 from abkit.experiment import DesignError, Experiment
@@ -33,6 +34,177 @@ def _help_expander(chart_type: str, *, table: bool = False) -> None:
     label = HELP_EXPANDER_LABEL_TABLE if table else HELP_EXPANDER_LABEL
     with st.expander(label, expanded=False):
         st.markdown(get_help_text(chart_type))
+
+
+# --------------------------------------------------------------------------
+# Auth (DOCKER.md §4) — активируется только при ABKIT_MODE=db. Файловый режим
+# (дефолт) не показывает логин-экран и current_user всегда None.
+# --------------------------------------------------------------------------
+
+_SESSION_COOKIE_NAME = "abkit_session"
+
+
+def _db_mode() -> bool:
+    return os.environ.get("ABKIT_MODE", "file") == "db"
+
+
+def _list_experiment_names(experiments_dir: Path, *, active_only: bool = False) -> dict[str, dict]:
+    """Список экспериментов для селектбоксов/таблиц — Postgres (ExperimentRepo)
+    в серверном режиме, файловый registry.json иначе. Форма возвращаемого
+    словаря одинакова в обоих режимах, поэтому вызывающий код не меняется."""
+    if _db_mode():
+        from abkit.db.repositories import ExperimentRepo
+        from abkit.db.store import get_data_dir
+
+        rows = ExperimentRepo().list_all(active_only=active_only)
+        data_dir = get_data_dir()
+        return {
+            r.name: {
+                "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "path": str(data_dir / r.name),
+                "owner_id": str(r.owner_id),
+            }
+            for r in rows
+        }
+    return storage.list_experiments(experiments_dir, active_only=active_only)
+
+
+def _run_inline_script(script: str) -> None:
+    """Выполняет небольшой inline JS через data: URI в st.iframe.
+
+    st.components.v1.html снят с поддержки в Streamlit 1.58 (дедлайн удаления
+    2026-06-01, уже прошел) — общий заменитель st.iframe принимает только
+    путь/URL, не сырой HTML, поэтому заворачиваем скрипт в data:text/html URI.
+    width/height=1 (0 невалиден для st.iframe) — фрейм визуально незаметен.
+    """
+    import urllib.parse
+
+    html = f"<script>{script}</script>"
+    uri = "data:text/html," + urllib.parse.quote(html)
+    st.iframe(uri, height=1, width=1)
+
+
+def _set_session_cookie(token: str) -> None:
+    """Best-effort JS-мост: пишет токен сессии в cookie браузера, чтобы сессия
+    переживала обновление страницы. Не HttpOnly — ограничение чистого Streamlit
+    без reverse-proxy/middleware перед ним (TODO(D4): перенести установку cookie
+    на nginx/middleware и сделать HttpOnly, как того требует DOCKER.md §11).
+    Канонический источник правды для logout/истечения сессии — не сам факт
+    наличия cookie, а серверная проверка JWT в _render_login_gate."""
+    hours = float(os.environ.get("ABKIT_SESSION_LIFETIME_HOURS", "72"))
+    max_age = int(hours * 3600)
+    _run_inline_script(
+        f'document.cookie = "{_SESSION_COOKIE_NAME}={token}; max-age={max_age}; '
+        f'path=/; SameSite=Lax";'
+    )
+
+
+def _clear_session_cookie() -> None:
+    _run_inline_script(
+        f'document.cookie = "{_SESSION_COOKIE_NAME}=; max-age=0; path=/; SameSite=Lax";'
+    )
+
+
+def _do_logout() -> None:
+    st.session_state.pop("auth_token", None)
+    _clear_session_cookie()
+    st.rerun()
+
+
+def _render_self_registration_form() -> None:
+    from abkit.auth.service import self_register
+
+    with st.form("self_register_form"):
+        email = st.text_input("Email", key="reg_email")
+        name = st.text_input("Имя", key="reg_name")
+        password = st.text_input("Пароль", type="password", key="reg_password")
+        submitted = st.form_submit_button("Создать аккаунт")
+    if submitted:
+        try:
+            self_register(email=email, name=name, password=password)
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.success("Аккаунт создан (роль Viewer). Теперь войдите ниже.")
+
+
+def _render_login_form() -> None:
+    st.title("abkit — вход")
+    from abkit.auth.service import login as auth_login
+
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Пароль", type="password")
+        submitted = st.form_submit_button("Войти", type="primary")
+    if submitted:
+        try:
+            token = auth_login(email, password)
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.session_state["auth_token"] = token
+            _set_session_cookie(token)
+            st.rerun()
+
+    if os.environ.get("ABKIT_ALLOW_SELF_REGISTRATION", "false").lower() == "true":
+        with st.expander("Зарегистрироваться"):
+            _render_self_registration_form()
+
+
+def _render_force_password_change(current_user: CurrentUser) -> None:
+    st.title("Смена пароля")
+    st.info("Администратор сбросил ваш пароль — задайте новый перед продолжением.")
+    from abkit.auth.service import change_own_password
+
+    with st.form("force_change_password_form"):
+        old_password = st.text_input("Текущий (временный) пароль", type="password")
+        new_password = st.text_input("Новый пароль", type="password")
+        new_password2 = st.text_input("Повторите новый пароль", type="password")
+        submitted = st.form_submit_button("Сменить пароль", type="primary")
+    if not submitted:
+        return
+    if new_password != new_password2:
+        st.error("Пароли не совпадают")
+    elif len(new_password) < 8:
+        st.error("Пароль должен быть не короче 8 символов")
+    else:
+        try:
+            change_own_password(current_user, old_password, new_password)
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.success("Пароль изменен. Войдите заново.")
+            _do_logout()
+
+
+def _render_login_gate() -> CurrentUser | None:
+    """Единственное, что видит незалогиненный пользователь (DOCKER.md §4.2).
+    Возвращает CurrentUser при валидной сессии; иначе рендерит форму логина
+    (или принудительной смены пароля) и возвращает None — main() должен
+    прекратить рендер остального приложения в этом случае."""
+    from abkit.auth.service import current_user_from_token
+
+    token = st.session_state.get("auth_token")
+    if not token:
+        token = st.context.cookies.get(_SESSION_COOKIE_NAME)
+        if token:
+            st.session_state["auth_token"] = token
+
+    current_user = current_user_from_token(token)
+    if current_user is None:
+        if token:
+            st.session_state.pop("auth_token", None)
+        _render_login_form()
+        return None
+
+    if current_user.must_change_password:
+        _render_force_password_change(current_user)
+        return None
+
+    return current_user
 
 STATUS_TRANSITIONS = {
     "designed": ("running", "archived"),
@@ -419,8 +591,11 @@ def _build_design_config_from_form(data: pd.DataFrame) -> DesignConfig | None:
         return None
 
 
-def render_design_tab(experiments_dir: Path) -> None:
+def render_design_tab(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
     st.header("Дизайн эксперимента")
+    if current_user is not None and current_user.role == "viewer":
+        st.info("Недостаточно прав для создания экспериментов (нужна роль Editor или Admin).")
+        return
     _init_design_state()
     _render_design_intro()
 
@@ -573,11 +748,19 @@ def render_design_tab(experiments_dir: Path) -> None:
             st.rerun()
         with st.status("Проектируем эксперимент...", expanded=True) as status:
             try:
-                experiment = Experiment.design(
-                    config, data, experiments_dir=experiments_dir,
-                    progress_callback=lambda label: st.write(label),
-                )
-            except (DesignError, storage.StorageError) as e:
+                if current_user is not None:
+                    from abkit import jobs
+
+                    experiment = jobs.run_design(
+                        current_user, config, data, experiments_dir=experiments_dir,
+                        progress_callback=lambda label: st.write(label),
+                    )
+                else:
+                    experiment = Experiment.design(
+                        config, data, experiments_dir=experiments_dir,
+                        progress_callback=lambda label: st.write(label),
+                    )
+            except (DesignError, storage.StorageError, AuthError) as e:
                 status.update(label="Ошибка дизайна", state="error")
                 st.session_state.design_running = False
                 st.session_state.design_error = f"Ошибка дизайна: {e}"
@@ -816,9 +999,9 @@ def _render_analysis_results(results) -> None:
                 )
 
 
-def render_analyze_tab(experiments_dir: Path) -> None:
+def render_analyze_tab(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
     st.header("Анализ по фактическим данным")
-    registry = storage.list_experiments(experiments_dir)
+    registry = _list_experiment_names(experiments_dir)
     if not registry:
         st.info("Нет ни одного спроектированного эксперимента. Сначала перейдите в таб Design.")
         return
@@ -958,13 +1141,13 @@ def render_analyze_tab(experiments_dir: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def render_experiments_tab(experiments_dir: Path) -> None:
+def render_experiments_tab(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
     st.header("Реестр экспериментов")
     status_filter = st.selectbox(
         "Фильтр по статусу", ["все", "designed", "running", "completed", "archived"],
         key="exp_status_filter",
     )
-    registry = storage.list_experiments(experiments_dir)
+    registry = _list_experiment_names(experiments_dir)
     if status_filter != "все":
         registry = {k: v for k, v in registry.items() if v["status"] == status_filter}
 
@@ -980,7 +1163,7 @@ def render_experiments_tab(experiments_dir: Path) -> None:
 
     st.divider()
     st.subheader("Управление статусом")
-    all_registry = storage.list_experiments(experiments_dir)
+    all_registry = _list_experiment_names(experiments_dir)
     exp_name = st.selectbox("Эксперимент", sorted(all_registry.keys()), key="exp_status_select")
     current_status = all_registry[exp_name]["status"]
     st.write(f"Текущий статус: **{current_status}**")
@@ -991,14 +1174,33 @@ def render_experiments_tab(experiments_dir: Path) -> None:
         with col:
             if st.button(f"→ {new_status}", key=f"status_btn_{new_status}"):
                 try:
-                    storage.update_status(experiments_dir, exp_name, new_status)
-                except storage.StorageError as e:
+                    if current_user is not None:
+                        from abkit import jobs
+
+                        jobs.run_update_status(current_user, exp_name, new_status)
+                    else:
+                        storage.update_status(experiments_dir, exp_name, new_status)
+                except (storage.StorageError, AuthError) as e:
                     st.error(str(e))
                 else:
                     st.success(f"«{exp_name}» переведен в статус «{new_status}»")
                     st.rerun()
     if not allowed:
         st.caption("Дальнейших переходов статуса нет (архивный эксперимент).")
+
+    if current_user is not None and current_user.role == "admin":
+        with st.expander("⚠️ Удалить эксперимент безвозвратно"):
+            st.warning("Удаляются все данные эксперимента: назначения, датасеты, результаты анализов.")
+            if st.button("Удалить безвозвратно", key="exp_delete_btn"):
+                try:
+                    from abkit import jobs
+
+                    jobs.run_delete_experiment(current_user, exp_name)
+                except (storage.StorageError, AuthError) as e:
+                    st.error(str(e))
+                else:
+                    st.success(f"«{exp_name}» удален.")
+                    st.rerun()
 
     st.divider()
     st.subheader("Отчеты")
@@ -1055,9 +1257,12 @@ def _ab_report_to_df(report: ABReport) -> pd.DataFrame:
     )
 
 
-def render_validation_tab(experiments_dir: Path) -> None:
+def render_validation_tab(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
     st.header("Валидация симуляциями")
-    registry = storage.list_experiments(experiments_dir)
+    if current_user is not None and current_user.role == "viewer":
+        st.info("Недостаточно прав для запуска валидации (нужна роль Editor или Admin).")
+        return
+    registry = _list_experiment_names(experiments_dir)
     if not registry:
         st.info("Нет ни одного спроектированного эксперимента.")
         return
@@ -1090,11 +1295,19 @@ def render_validation_tab(experiments_dir: Path) -> None:
             progress.progress(done / total, text=f"A/A симуляции: {done}/{total}")
 
         try:
-            aa_report = run_aa(
-                data, experiment.config, n_sims=int(n_sims), compare_methods=compare,
-                show_progress=False, progress_callback=_aa_cb,
-            )
-        except (checks.AnalysisError, KeyError, ValueError) as e:
+            if current_user is not None:
+                from abkit import jobs
+
+                aa_report = jobs.run_validate_aa(
+                    current_user, data, experiment.config, n_sims=int(n_sims), compare_methods=compare,
+                    show_progress=False, progress_callback=_aa_cb,
+                )
+            else:
+                aa_report = run_aa(
+                    data, experiment.config, n_sims=int(n_sims), compare_methods=compare,
+                    show_progress=False, progress_callback=_aa_cb,
+                )
+        except (checks.AnalysisError, KeyError, ValueError, AuthError) as e:
             st.error(f"Ошибка валидации: {e}")
             return
         progress.empty()
@@ -1109,11 +1322,19 @@ def render_validation_tab(experiments_dir: Path) -> None:
                 progress2.progress(done / total, text=f"A/B симуляции: {done}/{total}")
 
             try:
-                ab_report = run_ab(
-                    data, experiment.config, n_sims=int(n_sims), effect=float(effect),
-                    compare_methods=compare, show_progress=False, progress_callback=_ab_cb,
-                )
-            except (checks.AnalysisError, KeyError, ValueError) as e:
+                if current_user is not None:
+                    from abkit import jobs
+
+                    ab_report = jobs.run_validate_ab(
+                        current_user, data, experiment.config, n_sims=int(n_sims), effect=float(effect),
+                        compare_methods=compare, show_progress=False, progress_callback=_ab_cb,
+                    )
+                else:
+                    ab_report = run_ab(
+                        data, experiment.config, n_sims=int(n_sims), effect=float(effect),
+                        compare_methods=compare, show_progress=False, progress_callback=_ab_cb,
+                    )
+            except (checks.AnalysisError, KeyError, ValueError, AuthError) as e:
                 st.error(f"Ошибка валидации: {e}")
                 return
             progress2.empty()
@@ -1123,14 +1344,127 @@ def render_validation_tab(experiments_dir: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# Admin (DOCKER.md §4.3) — виден только роли Admin, только в серверном режиме
+# --------------------------------------------------------------------------
+
+_ROLE_OPTIONS = ("viewer", "editor", "admin")
+
+
+def render_admin_tab(current_user: CurrentUser | None) -> None:
+    from abkit.auth.guards import require_admin
+    from abkit.auth.service import admin_create_user, admin_reset_password, admin_set_active, admin_set_role
+    from abkit.db.repositories import UserRepo
+
+    try:
+        require_admin(current_user)
+    except AuthError as e:
+        st.error(str(e))
+        return
+
+    st.header("Администрирование пользователей")
+
+    users = UserRepo().list_all()
+    rows = [
+        {
+            "email": u.email,
+            "имя": u.name,
+            "роль": u.role,
+            "активен": "да" if u.is_active else "нет",
+            "создан": u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "-",
+            "последний вход": u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "-",
+        }
+        for u in users
+    ]
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+
+    st.divider()
+    st.subheader("Создать пользователя")
+    with st.form("admin_create_user_form"):
+        new_email = st.text_input("Email")
+        new_name = st.text_input("Имя")
+        new_role = st.selectbox("Роль", _ROLE_OPTIONS, index=0)
+        new_password = st.text_input(
+            "Временный пароль (опционально — если пусто, сгенерируется автоматически)",
+            type="password",
+        )
+        submitted = st.form_submit_button("Создать", type="primary")
+    if submitted:
+        try:
+            _, generated = admin_create_user(
+                current_user, email=new_email, name=new_name, role=new_role,
+                password=new_password or None,
+            )
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.success(f"Пользователь «{new_email}» создан.")
+            if not new_password:
+                st.info(f"Временный пароль (сохраните — показывается один раз): `{generated}`")
+            st.rerun()
+
+    if not users:
+        return
+
+    emails = [u.email for u in users]
+
+    st.divider()
+    st.subheader("Изменить роль")
+    col1, col2, col3 = st.columns([2, 2, 1])
+    role_email = col1.selectbox("Пользователь", emails, key="admin_role_email")
+    new_role_value = col2.selectbox("Новая роль", _ROLE_OPTIONS, key="admin_role_value")
+    if col3.button("Применить", key="admin_role_apply"):
+        try:
+            admin_set_role(current_user, target_email=role_email, role=new_role_value)
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.success(f"Роль «{role_email}» изменена на «{new_role_value}».")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Блокировка / разблокировка")
+    col1, col2 = st.columns([3, 1])
+    active_email = col1.selectbox("Пользователь", emails, key="admin_active_email")
+    current_active = next((u.is_active for u in users if u.email == active_email), True)
+    action_label = "Заблокировать" if current_active else "Разблокировать"
+    if col2.button(action_label, key="admin_active_toggle"):
+        try:
+            admin_set_active(current_user, target_email=active_email, is_active=not current_active)
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.success(f"«{active_email}»: {'заблокирован' if current_active else 'разблокирован'}.")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Сбросить пароль")
+    col1, col2 = st.columns([3, 1])
+    reset_email = col1.selectbox("Пользователь", emails, key="admin_reset_email")
+    if col2.button("Сбросить", key="admin_reset_btn"):
+        try:
+            generated = admin_reset_password(current_user, target_email=reset_email)
+        except AuthError as e:
+            st.error(str(e))
+        else:
+            st.success(f"Пароль «{reset_email}» сброшен.")
+            st.info(f"Временный пароль (сохраните — показывается один раз): `{generated}`")
+
+
+# --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
 
 
-def render_sidebar(experiments_dir: Path) -> None:
+def render_sidebar(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
     st.sidebar.title("abkit")
-    st.sidebar.caption(f"experiments_dir:\n`{experiments_dir}`")
-    registry = storage.list_experiments(experiments_dir)
+    if current_user is not None:
+        st.sidebar.caption(f"{current_user.email} · {current_user.role}")
+        if st.sidebar.button("Выйти", key="logout_btn"):
+            _do_logout()
+        st.sidebar.divider()
+    else:
+        st.sidebar.caption(f"experiments_dir:\n`{experiments_dir}`")
+    registry = _list_experiment_names(experiments_dir)
     if not registry:
         st.sidebar.info("Экспериментов пока нет.")
         return
@@ -1142,22 +1476,42 @@ def render_sidebar(experiments_dir: Path) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="abkit", page_icon="🧪", layout="wide")
+
+    current_user: CurrentUser | None = None
+    if _db_mode():
+        from abkit.auth.tokens import TokenError, get_secret_key
+
+        try:
+            get_secret_key()
+        except TokenError as e:
+            st.error(f"Ошибка конфигурации сервера: {e}")
+            st.stop()
+            return
+        current_user = _render_login_gate()
+        if current_user is None:
+            return
+
     experiments_dir = storage.get_experiments_dir()
-    render_sidebar(experiments_dir)
+    render_sidebar(experiments_dir, current_user)
 
     st.title("abkit — дизайн и анализ A/B тестов")
 
-    tab_design, tab_analyze, tab_experiments, tab_validation = st.tabs(
-        ["Design", "Analyze", "Experiments", "Validation"]
-    )
+    tab_labels = ["Design", "Analyze", "Experiments", "Validation"]
+    if current_user is not None and current_user.role == "admin":
+        tab_labels.append("Admin")
+    tabs = st.tabs(tab_labels)
+    tab_design, tab_analyze, tab_experiments, tab_validation = tabs[:4]
     with tab_design:
-        render_design_tab(experiments_dir)
+        render_design_tab(experiments_dir, current_user)
     with tab_analyze:
-        render_analyze_tab(experiments_dir)
+        render_analyze_tab(experiments_dir, current_user)
     with tab_experiments:
-        render_experiments_tab(experiments_dir)
+        render_experiments_tab(experiments_dir, current_user)
     with tab_validation:
-        render_validation_tab(experiments_dir)
+        render_validation_tab(experiments_dir, current_user)
+    if "Admin" in tab_labels:
+        with tabs[4]:
+            render_admin_tab(current_user)
 
 
 main()

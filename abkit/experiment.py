@@ -417,12 +417,17 @@ class Experiment:
         data: pd.DataFrame,
         experiments_dir: Path | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        owner_id: str | None = None,
     ) -> "Experiment":
         """Полный цикл дизайна: валидация -> изоляция -> мощность -> страты -> сплит ->
         проверки -> сохранение. Возвращает Experiment с заполненным .report и .assignments.
 
         progress_callback(label), если передан, вызывается перед каждым этапом с
         коротким описанием — для UI-индикаторов прогресса (см. app.py, st.status).
+        owner_id: только для ABKIT_MODE=db — кто владелец эксперимента (для прав
+        доступа, DOCKER.md §4.1); в файловом режиме игнорируется (там нет модели
+        пользователей). Если не передан в db-режиме — владельцем становится
+        служебный системный юзер (см. abkit/db/store.py).
         """
         from abkit.experiment_store import get_experiment_store
 
@@ -597,7 +602,7 @@ class Experiment:
         )
 
         cb("Сохраняем эксперимент...")
-        handle = store.create_experiment(final_config, assignments)
+        handle = store.create_experiment(final_config, assignments, owner_id=owner_id)
         path = handle.path
 
         experiment = cls(config=final_config, path=path, experiments_dir=experiments_dir)

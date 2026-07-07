@@ -180,6 +180,16 @@ class ExperimentRepo:
             elif new_status == "archived":
                 exp.archived_at = now
 
+    def delete(self, name: str) -> None:
+        """Admin-only (DOCKER.md §4.1, "Удалять эксперименты") — реальное
+        удаление строки; assignments/datasets/analysis_results удаляются
+        каскадом через FK ON DELETE CASCADE."""
+        with session_scope() as s:
+            exp = s.scalar(select(Experiment).where(Experiment.name == name))
+            if exp is None:
+                raise RepoError(f"Эксперимент '{name}' не найден")
+            s.delete(exp)
+
 
 class AssignmentRepo:
     def bulk_insert(self, experiment_id: uuid_mod.UUID, assignments: pd.DataFrame) -> None:
