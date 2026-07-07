@@ -37,6 +37,15 @@ class DesignConfig(BaseModel):
     alpha: float = 0.05
     power: float = 0.8
     mde: float | None = None
+    mde_abs_input: float | None = None
+    """Введенный пользователем абсолютный MDE (в единицах метрики) — если
+    задан, mde (относительный) вычислен из него как mde_abs_input /
+    baseline_mean метрики mde_source_metric. Хранится только для
+    трассируемости UI-ввода — расчет мощности всегда идет через mde
+    (относительный), это поле не влияет на логику."""
+    mde_source_metric: str | None = None
+    """Имя метрики, чей baseline использовался для перевода mde_abs_input в
+    относительный mde (см. mde_abs_input)."""
     sample_size: int | None = None
     split_method: Literal["simple", "stratified", "hash"] = "stratified"
     strata: list[str] = Field(default_factory=list)
@@ -47,8 +56,11 @@ class DesignConfig(BaseModel):
     выделить в отдельную страту 'unknown' (по умолчанию); drop — удалить таких
     юзеров из кандидатов; error — упасть с ошибкой (старое поведение)."""
     hash_salt: str | None = None
-    isolation: Literal["exclude", "warn", "off"] = "exclude"
+    isolation: Literal["exclude", "warn", "off", "exclude_selected"] = "exclude"
     exclude_experiments: Literal["all_active"] | list[str] = "all_active"
+    isolation_selected_experiments: list[str] = Field(default_factory=list)
+    """Имена экспериментов для isolation="exclude_selected" — учитываются
+    только они (а не "все активные кроме них", как в exclude_experiments)."""
     seed: int | None = None
     computed: dict[str, Any] | None = None
     """Величины, вычисленные на этапе дизайна: изоляция, мощность, проверки сплита."""

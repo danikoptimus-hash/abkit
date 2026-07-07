@@ -114,3 +114,18 @@ class DbExperimentStore:
                 if exp is not None:
                     exclude_ids.add(exp.id)
         return self.assignments.occupied_units_for_active_experiments(exclude_ids)
+
+    def occupied_units_selected(
+        self, selected_experiments: list[str], current_experiment_name: str | None
+    ) -> dict[str, set[str]]:
+        """Изоляция "только выбранные эксперименты" (UI: exclude_selected) —
+        в отличие от occupied_units, здесь selected_experiments — это INCLUDE-
+        список, а не exclude-список."""
+        ids: set[uuid_mod.UUID] = set()
+        for nm in selected_experiments:
+            if nm == current_experiment_name:
+                continue
+            exp = self.experiments.get_by_name(nm)
+            if exp is not None:
+                ids.add(exp.id)
+        return self.assignments.occupied_units_for_selected_experiments(ids)

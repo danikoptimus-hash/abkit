@@ -125,6 +125,19 @@ def _wilson_proportion_plot(
     return fig
 
 
+def p99_clip_stats(combined: pd.Series) -> tuple[float, int, float]:
+    """(P99-порог, число наблюдений выше него, их доля в %) — используется и
+    distribution_plot(clip_to_p99=True) для сужения оси, и вызывающей стороной
+    (app.py/report.py) для подписи под графиком "N наблюдений (X%) выше
+    порога..."."""
+    n = len(combined)
+    if n == 0:
+        return 0.0, 0, 0.0
+    threshold = float(combined.quantile(0.99))
+    n_above = int((combined > threshold).sum())
+    return threshold, n_above, n_above / n * 100
+
+
 def distribution_plot(
     control: pd.Series,
     treatment: pd.Series,
@@ -133,11 +146,20 @@ def distribution_plot(
     control_name: str = "control",
     treat_name: str = "treatment",
     trim_threshold: float | None = None,
+    clip_to_p99: bool = True,
 ) -> go.Figure:
     """Распределение метрики по группам — вид зависит от типа метрики:
     binary -> bar-chart долей с Wilson-ДИ (гистограмма непригодна для 0/1);
     continuous/ratio -> наложенные гистограммы + ECDF (для ratio исключаются
-    юзеры с нулевым знаменателем — они уже NaN в values на этот момент)."""
+    юзеры с нулевым знаменателем — они уже NaN в values на этот момент).
+
+    clip_to_p99: визуальное ограничение оси X 99-м перцентилем объединенных
+    данных (сам расчет/анализ эту опцию не видит и не меняется — только вид
+    графика). Наблюдения выше P99 попадают в последний бин гистограммы
+    (clip(upper=...) перед построением); ECDF считается по ПОЛНЫМ данным, но
+    ось X визуально обрезается тем же порогом. Подпись под графиком с числом
+    отсеченных наблюдений строится вызывающей стороной через p99_clip_stats()
+    на тех же исходных (control_clean+treatment_clean) данных."""
     if metric_type == "binary":
         return _wilson_proportion_plot(control, treatment, metric_name, control_name, treat_name)
 
@@ -147,17 +169,30 @@ def distribution_plot(
     n = len(control_clean) + len(treatment_clean)
     nbins = max(5, min(50, int(np.sqrt(max(n, 1)))))
 
+    all_values = pd.concat([control_clean, treatment_clean]) if n else pd.Series(dtype=float)
+
+    p99_threshold: float | None = None
+    if clip_to_p99 and n:
+        threshold, n_above, _pct_above = p99_clip_stats(all_values)
+        if n_above > 0:
+            p99_threshold = threshold
+
+    hist_control = control_clean.clip(upper=p99_threshold) if p99_threshold is not None else control_clean
+    hist_treatment = (
+        treatment_clean.clip(upper=p99_threshold) if p99_threshold is not None else treatment_clean
+    )
+
     fig = make_subplots(rows=2, cols=1, subplot_titles=["Распределение", "ECDF"])
 
     fig.add_trace(
         go.Histogram(
-            x=control_clean, name=control_name, opacity=0.55, histnorm="probability density", nbinsx=nbins
+            x=hist_control, name=control_name, opacity=0.55, histnorm="probability density", nbinsx=nbins
         ),
         row=1, col=1,
     )
     fig.add_trace(
         go.Histogram(
-            x=treatment_clean, name=treat_name, opacity=0.55, histnorm="probability density", nbinsx=nbins
+            x=hist_treatment, name=treat_name, opacity=0.55, histnorm="probability density", nbinsx=nbins
         ),
         row=1, col=1,
     )
@@ -170,6 +205,11 @@ def distribution_plot(
         ecdf = np.arange(1, len(values) + 1) / len(values)
         fig.add_trace(go.Scatter(x=values, y=ecdf, mode="lines", name=f"{name} ECDF"), row=2, col=1)
 
+    if p99_threshold is not None:
+        x_min = float(all_values.min())
+        fig.update_xaxes(range=[x_min, p99_threshold], row=1, col=1)
+        fig.update_xaxes(range=[x_min, p99_threshold], row=2, col=1)
+
     if trim_threshold is not None:
         fig.add_vline(x=trim_threshold, line_dash="dot", line_color="red", row=1, col=1)
 
@@ -177,7 +217,6 @@ def distribution_plot(
     if metric_type == "ratio" and n_excluded > 0:
         title += f" — {n_excluded} юзеров исключены (нулевой знаменатель)"
 
-    all_values = pd.concat([control_clean, treatment_clean]) if n else pd.Series(dtype=float)
     skew = float(all_values.skew()) if len(all_values) > 2 else 0.0
     if skew > 3 and len(all_values) and all_values.min() > 0:
         fig.update_layout(

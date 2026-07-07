@@ -25,6 +25,10 @@ class _OccupiedUnitsSource(Protocol):
         current_experiment_name: str | None,
     ) -> dict[str, set]: ...
 
+    def occupied_units_selected(
+        self, selected_experiments: list[str], current_experiment_name: str | None
+    ) -> dict[str, set]: ...
+
 
 @dataclass
 class IsolationResult:
@@ -62,25 +66,51 @@ def _collect_occupied_units(active: dict[str, dict]) -> dict[str, set]:
     return occupied
 
 
+def _active_experiments_selected(
+    experiments_dir: Path, selected_experiments: list[str], current_experiment_name: str | None
+) -> dict[str, dict]:
+    """Как _active_experiments, но вместо "все активные КРОМЕ X" — "только эти
+    конкретные X" (и все равно только среди активных статусов — выбор
+    конкретного completed/archived эксперимента в UI и так невозможен, см.
+    render_design_tab, но на бэкенде подстраховываемся тоже)."""
+    registry = storage.read_registry(experiments_dir)
+    return {
+        name: entry
+        for name, entry in registry.items()
+        if name in selected_experiments
+        and entry["status"] in _ACTIVE_STATUSES
+        and name != current_experiment_name
+    }
+
+
 def apply_isolation(
     data: pd.DataFrame,
     unit_col: str,
     experiments_dir: Path,
-    mode: Literal["exclude", "warn", "off"] = "exclude",
+    mode: Literal["exclude", "warn", "off", "exclude_selected"] = "exclude",
     exclude_experiments: Literal["all_active"] | list[str] = "all_active",
     current_experiment_name: str | None = None,
     store: _OccupiedUnitsSource | None = None,
+    selected_experiments: list[str] | None = None,
 ) -> IsolationResult:
     """Исключает из кандидатов юзеров, занятых в других designed/running экспериментах.
 
     mode="off" — пропустить проверку. mode="warn" — посчитать пересечение, но не
     фильтровать (решение об исключении принимается вызывающей стороной, например CLI
-    после подтверждения пользователем). mode="exclude" — молча исключить.
+    после подтверждения пользователем). mode="exclude" — молча исключить (из ВСЕХ
+    активных, кроме перечисленных в exclude_experiments). mode="exclude_selected" —
+    молча исключить, но только из юнитов, занятых экспериментами, явно перечисленными
+    в selected_experiments (остальные активные эксперименты не учитываются).
+
+    В любом режиме, кроме off, учитываются ТОЛЬКО эксперименты со статусами
+    designed/running (_ACTIVE_STATUSES) — completed/archived никогда не
+    блокируют кандидатов, ни в файловом, ни в db-режиме.
 
     store: в db-режиме (ABKIT_MODE=db) передается DbExperimentStore — тогда
-    список занятых unit_id получается одним SQL-запросом (store.occupied_units)
-    вместо чтения assignments.parquet каждого активного эксперимента по
-    отдельности. По умолчанию (store=None) поведение файлового режима не меняется.
+    список занятых unit_id получается одним SQL-запросом (store.occupied_units/
+    occupied_units_selected) вместо чтения assignments.parquet каждого
+    активного эксперимента по отдельности. По умолчанию (store=None) поведение
+    файлового режима не меняется.
     """
     n_before = len(data)
     if mode == "off":
@@ -88,7 +118,14 @@ def apply_isolation(
             candidates=data, n_before=n_before, n_excluded=0, n_available=n_before, mode=mode
         )
 
-    if store is not None:
+    if mode == "exclude_selected":
+        selected = selected_experiments or []
+        if store is not None:
+            occupied = store.occupied_units_selected(selected, current_experiment_name)
+        else:
+            active = _active_experiments_selected(experiments_dir, selected, current_experiment_name)
+            occupied = _collect_occupied_units(active)
+    elif store is not None:
         occupied = store.occupied_units(exclude_experiments, current_experiment_name)
     else:
         active = _active_experiments(experiments_dir, exclude_experiments)
@@ -106,7 +143,7 @@ def apply_isolation(
             excluded_by_experiment[name] = len(overlap)
             excluded_units |= overlap
 
-    if mode == "exclude" and excluded_units:
+    if mode in ("exclude", "exclude_selected") and excluded_units:
         candidates = data[~data[unit_col].isin(excluded_units)]
     else:
         candidates = data

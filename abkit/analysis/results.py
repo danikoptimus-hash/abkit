@@ -131,7 +131,20 @@ class AnalysisResults:
         report_path = target_dir / "report.html"
         report_path.write_text(html, encoding="utf-8")
         (target_dir / "results.json").write_text(self.to_json(), encoding="utf-8")
+        self._write_detailed_results_csv(target_dir / "detailed_results.csv")
         return report_path
+
+    def _write_detailed_results_csv(self, path: Path) -> None:
+        import csv
+
+        control_name = self._context.get("control_name", "") if self._context else ""
+        rows = self.detailed_display_rows(control_name)
+        if not rows:
+            return
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
 
     def summary(self) -> None:
         """Печатает консольную таблицу результатов (rich)."""
@@ -161,6 +174,83 @@ class AnalysisResults:
             console.print("[yellow]Предупреждения:[/yellow]")
             for w in self.global_warnings:
                 console.print(f"  - {w}")
+
+    def detailed_rows(self, control_name: str, alpha: float = 0.05) -> list[dict[str, Any]]:
+        """Строки для "Детальная таблица результатов" (UI/HTML-отчет) — ВСЕ
+        вычисленные сравнения (designed и exploratory-методы), не только
+        designed-цепочка, как в verdict()/verdicts(). Вердикт считается по
+        КАЖДОЙ строке отдельно (тем же правилом, что verdict()). Сортировка:
+        метрика, затем метод."""
+        correction = self._context.get("correction") if self._context else None
+        rows: list[dict[str, Any]] = []
+        for r in self._results:
+            p = r.p_value_adjusted if r.p_value_adjusted is not None else r.p_value
+            if p < alpha and r.effect_abs > 0:
+                verdict = "significant_positive"
+            elif p < alpha and r.effect_abs < 0:
+                verdict = "significant_negative"
+            else:
+                verdict = "no_effect_detected"
+
+            if r.variance_reduction is None:
+                variance_reduction_label = "—"
+            else:
+                if "CUPED" in r.method:
+                    technique = "CUPED"
+                elif "PostStratification" in r.method:
+                    technique = "PostStrat"
+                else:
+                    technique = "да"
+                variance_reduction_label = f"{technique} ({r.variance_reduction:.1%})"
+
+            rows.append(
+                {
+                    "metric": r.metric,
+                    "group": f"{r.treatment_group} vs {control_name}",
+                    "method": r.method,
+                    "designed": r.is_designed_method,
+                    "effect_abs": r.effect_abs,
+                    "effect_rel": r.effect_rel,
+                    "ci_rel_lo": r.ci_rel[0],
+                    "ci_rel_hi": r.ci_rel[1],
+                    "p_value": r.p_value,
+                    "p_value_adjusted": r.p_value_adjusted,
+                    "correction_method": correction or "none",
+                    "n_control": r.n.get(control_name),
+                    "n_test": r.n.get(r.treatment_group),
+                    "variance_reduction": variance_reduction_label,
+                    "verdict": verdict,
+                }
+            )
+        rows.sort(key=lambda row: (row["metric"], row["method"]))
+        return rows
+
+    def detailed_display_rows(self, control_name: str, alpha: float = 0.05) -> list[dict[str, Any]]:
+        """Как detailed_rows(), но с готовыми к показу русскими заголовками
+        колонок и отформатированными значениями — единый источник для
+        Streamlit (app.py), HTML-отчета (report.py) и CSV-выгрузки (report())."""
+        rows = self.detailed_rows(control_name, alpha=alpha)
+        return [
+            {
+                "Метрика": row["metric"],
+                "Группа сравнения": row["group"],
+                "Метод": row["method"],
+                "Designed": "✓" if row["designed"] else "",
+                "Эффект (абс)": row["effect_abs"],
+                "Эффект (отн, %)": (
+                    row["effect_rel"] * 100 if row["effect_rel"] == row["effect_rel"] else None
+                ),
+                "95% ДИ (отн.)": f"[{row['ci_rel_lo'] * 100:.2f}%, {row['ci_rel_hi'] * 100:.2f}%]",
+                "p-value": row["p_value"],
+                "p-adj": row["p_value_adjusted"],
+                "Коррекция": row["correction_method"],
+                "n (control)": row["n_control"],
+                "n (test)": row["n_test"],
+                "Снижение дисперсии": row["variance_reduction"],
+                "Вердикт": row["verdict"],
+            }
+            for row in rows
+        ]
 
     def to_json(self) -> str:
         from abkit import __version__ as abkit_version  # локальный импорт: избегаем цикла

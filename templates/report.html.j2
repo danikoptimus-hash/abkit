@@ -20,6 +20,9 @@
   table { border-collapse: collapse; width: 100%; margin: 12px 0; }
   th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; font-size: 14px; }
   th { background: #f0f0f0; }
+  #section-full-results-table table tbody tr:nth-child(even) { background: #f7f7f7; }
+  #section-full-results-table table tbody tr.designed-row { font-weight: 600; }
+  #section-full-results-table { overflow-x: auto; }
   .warnings { background: #FFF3E0; border-left: 5px solid #EF6C00; padding: 10px 14px; margin: 12px 0; }
   pre { background: #f5f5f5; padding: 12px; overflow-x: auto; border-radius: 6px; }
   .metric-block { margin-bottom: 40px; }
@@ -59,6 +62,27 @@
     {% endfor %}
   {% endfor %}
   </div>
+</section>
+
+<section id="section-full-results-table">
+  <h2>Детальная таблица результатов</h2>
+  {% if detailed_rows %}
+  <p><a href="detailed_results.csv">Скачать таблицу CSV</a></p>
+  <table>
+    <thead>
+      <tr>{% for col in detailed_columns %}<th>{{ col }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in detailed_rows %}
+      <tr class="{{ 'designed-row' if row['Designed'] else '' }}">
+        {% for col in detailed_columns %}<td>{{ row[col] if row[col] is not none else '' }}</td>{% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>Нет вычисленных сравнений.</p>
+  {% endif %}
   {{ help_details('verdicts_table', True) }}
 </section>
 
@@ -75,9 +99,10 @@
   <section id="section-distributions">
     <h3>Распределения</h3>
     {% if section.distribution_htmls %}
-      {% for treat_name, html in section.distribution_htmls %}
+      {% for treat_name, html, clip_caption in section.distribution_htmls %}
         <p>{{ section.name }}: control vs {{ treat_name }}</p>
         {{ html | safe }}
+        {% if clip_caption %}<p class="clip-caption"><em>{{ clip_caption }}</em></p>{% endif %}
         {{ help_details('distribution_binary' if section.type == 'binary' else 'distribution_continuous') }}
       {% endfor %}
     {% else %}

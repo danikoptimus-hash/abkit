@@ -10,6 +10,7 @@ from abkit.experiment import Experiment
 _REPORT_SECTION_IDS = [
     "section-header",
     "section-verdicts",
+    "section-full-results-table",
     "section-forest",
     "section-distributions",
     "section-segments",
@@ -111,6 +112,22 @@ def test_analysis_report_has_all_sections_and_writes_results_json(tmp_path):
     payload = json.loads(results_json_path.read_text(encoding="utf-8"))
     assert "results" in payload
     assert len(payload["results"]) > 0
+
+
+def test_analysis_report_shows_p99_clip_caption_for_continuous_metric(tmp_path):
+    """UX10: гистограммы continuous-метрик визуально обрезаны по P99 — под
+    графиком должна быть подпись с порогом и числом отсеченных наблюдений."""
+    experiment = _demo_design(tmp_path)
+    rng = np.random.default_rng(5)
+    post_data = _demo_post_data(experiment, len(experiment.assignments), rng)
+
+    results = experiment.analyze(post_data)
+    report_path = results.report()
+    html = report_path.read_text(encoding="utf-8")
+
+    assert "clip-caption" in html
+    assert "99-м перцентилем" in html
+    assert "последний столбец" in html
 
 
 def test_analysis_report_opens_offline_plotly_inline(tmp_path):

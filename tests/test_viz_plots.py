@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import pytest
 
-from abkit.viz.plots import distribution_plot
+from abkit.viz.plots import distribution_plot, p99_clip_stats
 
 
 def _trace_types(fig: go.Figure) -> list[str]:
@@ -119,3 +119,49 @@ def test_ratio_metric_no_footnote_when_no_zero_denominator():
         control, treatment, metric_name="revenue_per_session", metric_type="ratio",
     )
     assert "исключены" not in fig.layout.title.text
+
+
+def test_p99_clip_stats_computes_threshold_and_share_above():
+    combined = pd.Series(list(range(1, 101)))  # 1..100, P99 = 99.01-ish
+    threshold, n_above, pct_above = p99_clip_stats(combined)
+    assert threshold == pytest.approx(combined.quantile(0.99))
+    assert n_above == int((combined > threshold).sum())
+    assert pct_above == pytest.approx(n_above / 100 * 100)
+
+
+def test_p99_clip_stats_empty_series_returns_zeros():
+    assert p99_clip_stats(pd.Series(dtype=float)) == (0.0, 0, 0.0)
+
+
+def test_distribution_plot_clips_x_axis_to_p99_by_default():
+    rng = np.random.default_rng(8)
+    # нормальные данные + жирный выброс-хвост, чтобы P99 был заметно ниже максимума
+    control = pd.Series(np.concatenate([rng.normal(100, 10, size=950), rng.uniform(500, 1000, size=50)]))
+    treatment = pd.Series(np.concatenate([rng.normal(100, 10, size=950), rng.uniform(500, 1000, size=50)]))
+
+    fig = distribution_plot(control, treatment, metric_type="continuous")
+
+    combined = pd.concat([control, treatment])
+    threshold, n_above, _pct = p99_clip_stats(combined)
+    assert n_above > 0
+    hist_range = fig.layout.xaxis.range
+    ecdf_range = fig.layout.xaxis2.range
+    assert hist_range[1] == pytest.approx(threshold)
+    assert ecdf_range[1] == pytest.approx(threshold)
+    # гистограмма при этом строится по clip()-нутым данным (выбросы собраны в
+    # последний бин, а не обрублены совсем) — максимум х-данных трейса == threshold
+    assert max(fig.data[0].x) == pytest.approx(threshold)
+    # ECDF же считается по ПОЛНЫМ данным (только ось обрезана визуально)
+    ecdf_trace = next(t for t in fig.data if t.type == "scatter")
+    assert max(ecdf_trace.x) > threshold
+
+
+def test_distribution_plot_clip_to_p99_false_shows_full_range():
+    rng = np.random.default_rng(9)
+    control = pd.Series(np.concatenate([rng.normal(100, 10, size=950), rng.uniform(500, 1000, size=50)]))
+    treatment = pd.Series(np.concatenate([rng.normal(100, 10, size=950), rng.uniform(500, 1000, size=50)]))
+
+    fig = distribution_plot(control, treatment, metric_type="continuous", clip_to_p99=False)
+
+    assert fig.layout.xaxis.range is None
+    assert max(fig.data[0].x) > 400  # исходные выбросы не обрезаны

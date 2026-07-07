@@ -122,9 +122,47 @@ def test_admin_sees_admin_tab_editor_does_not(db_url, tmp_path, monkeypatch):
     at.button[0].click().run(timeout=30)
 
     assert not at.exception
-    assert len(at.tabs) == 5  # + Admin
+    # 5 верхнеуровневых (+ Admin) + 2 подтаба внутри Admin ("Пользователи"/"Аудит") —
+    # at.tabs плоско считает все Tab-элементы дерева, включая вложенные
+    assert len(at.tabs) == 7
     admin_tab = at.tabs[4]
     assert any("Администрирование" in h.value for h in admin_tab.header)
+
+
+def test_tab_content_does_not_leak_across_tabs_db_mode(db_url, tmp_path, monkeypatch):
+    """UX0 (regression): каждый раздел должен жить строго внутри своего таба —
+    ни один заголовок одной вкладки не должен просачиваться в дерево другой
+    (в частности, "Администрирование" не должен быть виден вне Admin-таба,
+    и наоборот). Admin-роль -> все 5 вкладок присутствуют."""
+    from abkit.db.repositories import UserRepo
+
+    UserRepo().create(
+        email="admin4@co.com", name="Admin4", password_hash=hash_password("pw12345"), role="admin"
+    )
+    at = _fresh_db_app(db_url, tmp_path, monkeypatch)
+
+    next(ti for ti in at.text_input if ti.label == "Email").set_value("admin4@co.com")
+    next(ti for ti in at.text_input if ti.label == "Пароль").set_value("pw12345")
+    at.button[0].click().run(timeout=30)
+    assert not at.exception
+
+    own_headers = [
+        "Дизайн эксперимента",
+        "Анализ по фактическим данным",
+        "Реестр экспериментов",
+        "Валидация симуляциями",
+        "Администрирование",
+    ]
+    top_level_tabs = at.tabs[:5]
+    for i, tab in enumerate(top_level_tabs):
+        tab_headers = [h.value for h in tab.header]
+        assert tab_headers == [own_headers[i]], (
+            f"Таб {i} ({own_headers[i]}) содержит посторонние заголовки: {tab_headers}"
+        )
+        for j, other_header in enumerate(own_headers):
+            if j == i:
+                continue
+            assert other_header not in tab_headers
 
 
 def test_experiments_tab_history_and_admin_audit_show_design_event(db_url, tmp_path, monkeypatch):

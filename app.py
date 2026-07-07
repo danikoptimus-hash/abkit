@@ -18,7 +18,7 @@ from abkit import checks, storage
 from abkit.auth.guards import AuthError, CurrentUser
 from abkit.config import DesignConfig, MetricConfig
 from abkit.demo_data import generate_demo_design_data, generate_demo_post_data, make_demo_design_config
-from abkit.experiment import DesignError, Experiment
+from abkit.experiment import DesignError, Experiment, compute_metric_baseline_mean
 from abkit.pipeline import PipelineError
 from abkit.validation.simulation import ABReport, AAReport, run_aa, run_ab
 from abkit.viz.help_texts import (
@@ -27,7 +27,13 @@ from abkit.viz.help_texts import (
     get_help_text,
     get_warning,
 )
-from abkit.viz.plots import cumulative_lift_plot, distribution_plot, forest_plot, segment_forest_plot
+from abkit.viz.plots import (
+    cumulative_lift_plot,
+    distribution_plot,
+    forest_plot,
+    p99_clip_stats,
+    segment_forest_plot,
+)
 
 
 def _help_expander(chart_type: str, *, table: bool = False) -> None:
@@ -135,16 +141,19 @@ def _render_login_form() -> None:
     st.title("abkit — вход")
     from abkit.auth.service import login as auth_login
 
-    with st.form("login_form"):
-        email = st.text_input("Email")
-        password = st.text_input("Пароль", type="password")
-        submitted = st.form_submit_button("Войти", type="primary")
+    placeholder = st.empty()
+    with placeholder.container():
+        with st.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Пароль", type="password")
+            submitted = st.form_submit_button("Войти", type="primary")
     if submitted:
         try:
             token = auth_login(email, password)
         except AuthError as e:
             st.error(str(e))
         else:
+            placeholder.empty()
             st.session_state["auth_token"] = token
             _set_session_cookie(token)
             st.rerun()
@@ -283,18 +292,20 @@ GROUP BY user_id"""
 
 
 def _render_design_intro() -> None:
-    st.subheader("Шаг 1. Загрузите данные о ваших пользователях-кандидатах")
-    st.markdown(
-        "Это snapshot вашей базы пользователей **ПЕРЕД** тестом — те, кого вы "
-        "потенциально включите в эксперимент.\n\n"
-        "**Формат:** одна строка = один пользователь.\n\n"
-        "**Что должно быть в файле:**\n"
-        "- Колонка с ID пользователя (обязательно, уникальная)\n"
-        "- Признаки для стратификации: платформа, страна, сегмент, тариф и т.д. "
-        "(желательно — иначе группы не будут сбалансированы)\n"
-        "- Pre-period метрики: те же метрики, что будете мерить в тесте, но за "
-        "период ДО теста (желательно — без них не работает CUPED и точный расчет MDE)"
-    )
+    st.subheader("Загрузите данные о ваших пользователях-кандидатах")
+
+    with st.expander("❓ Что это за данные и что в них должно быть"):
+        st.markdown(
+            "Это snapshot вашей базы пользователей **ПЕРЕД** тестом — те, кого вы "
+            "потенциально включите в эксперимент.\n\n"
+            "**Формат:** одна строка = один пользователь.\n\n"
+            "**Что должно быть в файле:**\n"
+            "- Колонка с ID пользователя (обязательно, уникальная)\n"
+            "- Признаки для стратификации: платформа, страна, сегмент, тариф и т.д. "
+            "(желательно — иначе группы не будут сбалансированы)\n"
+            "- Pre-period метрики: те же метрики, что будете мерить в тесте, но за "
+            "период ДО теста (желательно — без них не работает CUPED и точный расчет MDE)"
+        )
 
     with st.expander("📊 Пример: как должны выглядеть данные"):
         st.markdown(
@@ -452,9 +463,9 @@ def _init_design_state() -> None:
     if "design_group_ids" not in st.session_state:
         st.session_state.design_group_ids = [_next_row_id("group"), _next_row_id("group")]
         gids = st.session_state.design_group_ids
-        st.session_state[f"group_name_{gids[0]}"] = "control"
+        st.session_state[f"group_name_{gids[0]}"] = "Control"
         st.session_state[f"group_prop_{gids[0]}"] = 0.5
-        st.session_state[f"group_name_{gids[1]}"] = "treatment"
+        st.session_state[f"group_name_{gids[1]}"] = "Test"
         st.session_state[f"group_prop_{gids[1]}"] = 0.5
     if "design_metric_ids" not in st.session_state:
         st.session_state.design_metric_ids = [_next_row_id("metric")]
@@ -462,10 +473,16 @@ def _init_design_state() -> None:
 
 def _render_groups_editor() -> None:
     st.markdown("**Группы** (сумма долей должна быть равна 1)")
+    header_cols = st.columns([3, 2, 1])
+    header_cols[0].caption("Имя группы")
+    header_cols[1].caption("Доля")
     for gid in list(st.session_state.design_group_ids):
         st.session_state.setdefault(f"group_name_{gid}", "")
         st.session_state.setdefault(f"group_prop_{gid}", 0.5)
         cols = st.columns([3, 2, 1])
+        # label_visibility="collapsed" здесь допустим: колонки "Имя группы"/"Доля"
+        # подписаны один раз общим заголовком выше (header_cols) — повторять его
+        # на каждой строке было бы избыточно для повторяющегося редактора строк.
         cols[0].text_input("Имя группы", key=f"group_name_{gid}", label_visibility="collapsed")
         cols[1].number_input(
             "Доля", key=f"group_prop_{gid}", min_value=0.0, max_value=1.0, step=0.05,
@@ -502,13 +519,12 @@ def _render_metrics_editor(data: pd.DataFrame) -> None:
             if metric_type == "ratio":
                 st.session_state.setdefault(f"metric_name_{mid}", "")
                 cols[1].text_input(
-                    "Имя метрики (ярлык)", key=f"metric_name_{mid}", label_visibility="collapsed",
+                    "Имя метрики (ярлык)", key=f"metric_name_{mid}",
                     placeholder="например conv_rate",
                 )
             else:
                 cols[1].selectbox(
-                    "Имя метрики (колонка)", list(data.columns), key=f"metric_name_{mid}",
-                    label_visibility="collapsed",
+                    "Столбец датафрейма", list(data.columns), key=f"metric_name_{mid}",
                 )
             cols[2].selectbox("Роль", ["primary", "secondary"], key=f"metric_role_{mid}")
             if cols[3].button("Удалить", key=f"metric_del_{mid}"):
@@ -532,6 +548,80 @@ def _render_metrics_editor(data: pd.DataFrame) -> None:
         st.rerun()
 
 
+def _render_absolute_mde_input(data: pd.DataFrame) -> None:
+    """UI для режима "абсолютный MDE": выбор метрики + величина в ее единицах,
+    с живым пересчетом в относительный MDE через baseline метрики."""
+    metric_choices: list[tuple[str, str, str]] = []  # (mid, name, type)
+    for mid in st.session_state.get("design_metric_ids", []):
+        mname = st.session_state.get(f"metric_name_{mid}", "").strip()
+        if mname:
+            mtype = st.session_state.get(f"metric_type_{mid}", "continuous")
+            metric_choices.append((mid, mname, mtype))
+
+    if not metric_choices:
+        st.warning("Сначала добавьте хотя бы одну метрику выше.")
+        return
+
+    metric_names = [name for _mid, name, _type in metric_choices]
+    st.session_state.setdefault("design_mde_abs_metric", metric_names[0])
+    if st.session_state["design_mde_abs_metric"] not in metric_names:
+        st.session_state["design_mde_abs_metric"] = metric_names[0]
+    chosen_name = st.selectbox(
+        "Метрика, для которой задается абсолютный MDE", metric_names, key="design_mde_abs_metric",
+    )
+    chosen_mid, _name, chosen_type = next(m for m in metric_choices if m[1] == chosen_name)
+
+    unit_hint = "в процентных пунктах, например 0.01 = +1 п.п." if chosen_type == "binary" else "в единицах метрики"
+    st.session_state.setdefault("design_mde_abs", 0.0)
+    st.number_input(f"Абсолютный MDE ({unit_hint})", step=0.01, key="design_mde_abs")
+
+    kwargs = _metric_kwargs_from_session(chosen_mid)
+    metric = None
+    if kwargs is not None:
+        try:
+            metric = MetricConfig(**kwargs)
+        except ValidationError:
+            metric = None
+
+    baseline_mean = compute_metric_baseline_mean(metric, data) if metric is not None else None
+    abs_value = st.session_state.get("design_mde_abs", 0.0)
+
+    if baseline_mean is None:
+        st.error(
+            f"Для метрики «{chosen_name}» не удалось определить baseline (среднее по "
+            "pre-period данным) — для абсолютного MDE нужен baseline. Проверьте, что "
+            "у метрики указана колонка с реальными значениями (для continuous/binary — "
+            "имя метрики; для ratio — числитель и знаменатель)."
+        )
+    elif baseline_mean == 0:
+        st.error(f"Baseline метрики «{chosen_name}» равен нулю — относительный MDE неопределен.")
+    else:
+        rel_mde = abs_value / baseline_mean
+        st.caption(f"≈ {rel_mde:.1%} относительного MDE при текущем среднем {baseline_mean:.4g}")
+
+
+def _metric_kwargs_from_session(mid: str) -> dict[str, Any] | None:
+    """Собирает сырые kwargs для MetricConfig из session_state одного ряда
+    формы метрик. None, если ряд не заполнен (имя пустое) — вызывающая
+    сторона просто пропускает такой ряд."""
+    mname = st.session_state.get(f"metric_name_{mid}", "").strip()
+    if not mname:
+        return None
+    mtype = st.session_state.get(f"metric_type_{mid}", "continuous")
+    mrole = st.session_state.get(f"metric_role_{mid}", "primary")
+    kwargs: dict[str, Any] = dict(name=mname, type=mtype, role=mrole)
+    if mtype == "ratio":
+        num = st.session_state.get(f"metric_num_{mid}")
+        den = st.session_state.get(f"metric_den_{mid}")
+        kwargs["num"] = None if num == "(нет)" else num
+        kwargs["den"] = None if den == "(нет)" else den
+    else:
+        pre_col = st.session_state.get(f"metric_precol_{mid}")
+        if pre_col and pre_col != "(нет)":
+            kwargs["pre_col"] = pre_col
+    return kwargs
+
+
 def _build_design_config_from_form(data: pd.DataFrame) -> DesignConfig | None:
     name = st.session_state.get("design_name", "").strip()
     unit_col = st.session_state.get("design_unit_col")
@@ -544,33 +634,48 @@ def _build_design_config_from_form(data: pd.DataFrame) -> DesignConfig | None:
 
     metrics: list[MetricConfig] = []
     for mid in st.session_state.design_metric_ids:
-        mname = st.session_state.get(f"metric_name_{mid}", "").strip()
-        if not mname:
+        kwargs = _metric_kwargs_from_session(mid)
+        if kwargs is None:
             continue
-        mtype = st.session_state.get(f"metric_type_{mid}", "continuous")
-        mrole = st.session_state.get(f"metric_role_{mid}", "primary")
-        kwargs: dict[str, Any] = dict(name=mname, type=mtype, role=mrole)
-        if mtype == "ratio":
-            num = st.session_state.get(f"metric_num_{mid}")
-            den = st.session_state.get(f"metric_den_{mid}")
-            kwargs["num"] = None if num == "(нет)" else num
-            kwargs["den"] = None if den == "(нет)" else den
-        else:
-            pre_col = st.session_state.get(f"metric_precol_{mid}")
-            if pre_col and pre_col != "(нет)":
-                kwargs["pre_col"] = pre_col
         try:
             metrics.append(MetricConfig(**kwargs))
         except ValidationError as e:
-            st.session_state.design_error = f"Ошибка в метрике '{mname}': {e}"
+            st.session_state.design_error = f"Ошибка в метрике '{kwargs['name']}': {e}"
             return None
 
     strata = st.session_state.get("design_strata", [])
     size_mode = st.session_state.get("design_size_mode")
-    mde = st.session_state.get("design_mde") if size_mode == "mde" else None
+    mde: float | None = None
+    mde_abs_input: float | None = None
+    mde_source_metric: str | None = None
+    if size_mode == "mde_rel":
+        mde = st.session_state.get("design_mde")
+    elif size_mode == "mde_abs":
+        chosen_name = st.session_state.get("design_mde_abs_metric")
+        abs_value = st.session_state.get("design_mde_abs")
+        metric = next((m for m in metrics if m.name == chosen_name), None)
+        if metric is None:
+            st.session_state.design_error = "Не удалось определить метрику для абсолютного MDE."
+            return None
+        baseline_mean = compute_metric_baseline_mean(metric, data)
+        if baseline_mean is None:
+            st.session_state.design_error = (
+                f"Для метрики «{chosen_name}» не удалось определить baseline (нужна "
+                "pre-period колонка с реальными значениями) — абсолютный MDE недоступен."
+            )
+            return None
+        if baseline_mean == 0:
+            st.session_state.design_error = (
+                f"Baseline метрики «{chosen_name}» равен нулю — относительный MDE неопределен."
+            )
+            return None
+        mde = abs_value / baseline_mean
+        mde_abs_input = abs_value
+        mde_source_metric = chosen_name
     sample_size = int(st.session_state["design_sample_size"]) if size_mode == "sample_size" else None
     split_method = st.session_state.get("design_split_method", "stratified")
     isolation_mode = st.session_state.get("design_isolation", "exclude")
+    isolation_selected = st.session_state.get("design_isolation_selected", [])
     nan_strategy = st.session_state.get("design_nan_strategy", "separate_stratum")
 
     try:
@@ -581,9 +686,12 @@ def _build_design_config_from_form(data: pd.DataFrame) -> DesignConfig | None:
             metrics=metrics,
             strata=strata,
             mde=mde,
+            mde_abs_input=mde_abs_input,
+            mde_source_metric=mde_source_metric,
             sample_size=sample_size,
             split_method=split_method,
             isolation=isolation_mode,
+            isolation_selected_experiments=isolation_selected,
             nan_strategy=nan_strategy,
         )
     except ValidationError as e:
@@ -709,27 +817,50 @@ def render_design_tab(experiments_dir: Path, current_user: CurrentUser | None = 
 
     st.radio(
         "Размер эксперимента",
-        ["mde", "sample_size", "все доступные"],
+        ["mde_rel", "mde_abs", "sample_size", "все доступные"],
         format_func=lambda v: {
-            "mde": "Задать целевой относительный MDE",
+            "mde_rel": "Задать целевой относительный MDE",
+            "mde_abs": "Задать целевой абсолютный MDE",
             "sample_size": "Задать размер выборки",
             "все доступные": "Использовать все доступные данные",
         }[v],
         key="design_size_mode",
     )
-    if st.session_state.get("design_size_mode") == "mde":
+    size_mode = st.session_state.get("design_size_mode")
+    if size_mode == "mde_rel":
         st.session_state.setdefault("design_mde", 0.05)
         st.number_input(
             "Относительный MDE (например 0.05 = 5%)", min_value=0.0001, step=0.01, key="design_mde",
         )
-    elif st.session_state.get("design_size_mode") == "sample_size":
+    elif size_mode == "mde_abs":
+        _render_absolute_mde_input(data)
+    elif size_mode == "sample_size":
         st.session_state.setdefault("design_sample_size", 1000)
         st.number_input("Общий размер выборки", min_value=1, step=100, key="design_sample_size")
 
     st.selectbox("Метод сплита", ["stratified", "simple", "hash"], key="design_split_method")
     st.selectbox(
-        "Изоляция от других активных экспериментов", ["exclude", "warn", "off"], key="design_isolation"
+        "Изоляция от других активных экспериментов",
+        ["exclude", "warn", "off", "exclude_selected"],
+        format_func=lambda v: {
+            "exclude": "exclude — исключить участников всех активных тестов (рекомендуется)",
+            "warn": "warn — показать пересечение и спросить подтверждение",
+            "off": "off — не исключать никого (осознанный риск пересечения)",
+            "exclude_selected": "exclude_selected — исключить участников только выбранных тестов",
+        }[v],
+        key="design_isolation",
     )
+    if st.session_state.get("design_isolation") == "exclude_selected":
+        active_registry = _list_experiment_names(experiments_dir, active_only=True)
+        current_name = st.session_state.get("design_name")
+        active_names = [name for name in active_registry if name != current_name]
+        if not active_names:
+            st.warning("Нет активных (designed/running) экспериментов для выбора.")
+        st.multiselect(
+            "Эксперименты, из которых исключить пересекающихся участников",
+            active_names,
+            key="design_isolation_selected",
+        )
 
     st.session_state.setdefault("design_running", False)
     design_clicked = st.button(
@@ -881,25 +1012,6 @@ def _render_samples_section(exp_path: Path, exp_name: str, key_prefix: str = "")
 # --------------------------------------------------------------------------
 
 
-def _results_to_df(results) -> pd.DataFrame:
-    rows = []
-    for r in results.results:
-        rows.append(
-            {
-                "метрика": r.metric,
-                "группа": r.treatment_group,
-                "метод": r.method,
-                "эффект (абс)": r.effect_abs,
-                "эффект (отн, %)": r.effect_rel * 100 if r.effect_rel == r.effect_rel else None,
-                "p-value": r.p_value,
-                "p-adj": r.p_value_adjusted,
-                "designed": r.is_designed_method,
-                "роль": r.role,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
 _VERDICT_COLOR = {
     "significant_positive": "green",
     "significant_negative": "red",
@@ -907,9 +1019,16 @@ _VERDICT_COLOR = {
 }
 
 
+def _detailed_results_to_df(results, control_name: str) -> pd.DataFrame:
+    return pd.DataFrame(results.detailed_display_rows(control_name))
+
+
 def _render_analysis_results(results) -> None:
     for w in results.global_warnings:
         st.warning(w)
+
+    context = results.context or {}
+    control_name = context.get("control_name", "")
 
     st.markdown("### Вердикты")
     metrics = results.metrics
@@ -925,12 +1044,27 @@ def _render_analysis_results(results) -> None:
                 st.markdown(f":{color}[{verdict}]")
                 st.caption(f"{r.treatment_group}: {r.effect_rel:.2%} (p={r.p_value:.4g})")
 
-    st.markdown("### Таблица результатов")
-    st.dataframe(_results_to_df(results), hide_index=True)
+    st.markdown("### Детальная таблица результатов")
+    detailed_df = _detailed_results_to_df(results, control_name)
+    st.dataframe(
+        detailed_df,
+        hide_index=True,
+        column_config={
+            "Эффект (отн, %)": st.column_config.NumberColumn(format="%.2f%%"),
+            "p-value": st.column_config.NumberColumn(format="%.4f"),
+            "p-adj": st.column_config.NumberColumn(format="%.4f"),
+        },
+    )
+    st.download_button(
+        "Скачать таблицу CSV",
+        data=detailed_df.to_csv(index=False).encode("utf-8"),
+        file_name="detailed_results.csv",
+        mime="text/csv",
+        key="download_detailed_results_csv",
+    )
     _help_expander("verdicts_table", table=True)
 
     st.markdown("### Графики")
-    context = results.context or {}
     raw_values = context.get("raw_values", {})
     segment_results = context.get("segment_results", {})
     daily_results = context.get("daily_results", {})
@@ -950,6 +1084,11 @@ def _render_analysis_results(results) -> None:
         distribution_chart_type = "distribution_binary" if metric_type == "binary" else "distribution_continuous"
         metric_raw = raw_values.get(metric_name, {})
         control_series = metric_raw.get(control_name)
+        show_full_range = False
+        if metric_type != "binary" and control_series is not None:
+            show_full_range = st.toggle(
+                "Показать полный диапазон", key=f"dist_full_range_{metric_name}", value=False,
+            )
         for treat_name, series in metric_raw.items():
             if treat_name == control_name or control_series is None:
                 continue
@@ -961,8 +1100,18 @@ def _render_analysis_results(results) -> None:
                     metric_type=metric_type,
                     control_name=control_name,
                     treat_name=treat_name,
+                    clip_to_p99=not show_full_range,
                 ),
             )
+            if metric_type != "binary" and not show_full_range:
+                combined = pd.concat([control_series.dropna(), series.dropna()])
+                threshold, n_above, pct_above = p99_clip_stats(combined)
+                if n_above > 0:
+                    st.caption(
+                        f"Для наглядности ось ограничена 99-м перцентилем ({threshold:.4g}). "
+                        f"{n_above} наблюдений ({pct_above:.1f}%) выше порога собраны в "
+                        "последний столбец."
+                    )
             _help_expander(distribution_chart_type)
 
         for treat_name, seg_list in segment_results.get(metric_name, {}).items():
@@ -1382,110 +1531,143 @@ def render_validation_tab(experiments_dir: Path, current_user: CurrentUser | Non
 _ROLE_OPTIONS = ("viewer", "editor", "admin")
 
 
-def render_admin_tab(current_user: CurrentUser | None) -> None:
-    from abkit.auth.guards import require_admin
-    from abkit.auth.service import admin_create_user, admin_reset_password, admin_set_active, admin_set_role
-    from abkit.db.repositories import UserRepo
+def _render_admin_user_form(current_user: CurrentUser, users: list) -> None:
+    """Форма в стиле Superset "Edit User" — используется и для создания (+),
+    и для редактирования существующего (email тогда read-only: это логин,
+    смена требует отдельной логики уникальности/переизобретения токена)."""
+    from abkit.auth.service import admin_create_user, admin_set_active, admin_set_role, admin_update_name
+
+    editing_email = st.session_state.get("admin_edit_user_email")
+    is_new = editing_email == "__new__"
+    existing = None if is_new else next((u for u in users if u.email == editing_email), None)
+    if not is_new and existing is None:
+        st.session_state.admin_edit_user_email = None
+        return
+
+    st.markdown(f"**{'Новый пользователь' if is_new else 'Изменить пользователя'}**")
+    with st.form("admin_user_edit_form"):
+        name = st.text_input("Имя", value=existing.name if existing else "")
+        if is_new:
+            email = st.text_input("Email")
+        else:
+            st.text_input("Email", value=existing.email, disabled=True)
+            email = existing.email
+            st.caption("Email нельзя изменить — это логин пользователя.")
+        active = st.checkbox("Активен", value=existing.is_active if existing else True)
+        st.caption("Лучше деактивировать пользователя, чем удалять.")
+        role = st.selectbox(
+            "Роль", _ROLE_OPTIONS, index=_ROLE_OPTIONS.index(existing.role) if existing else 0,
+        )
+        password = None
+        if is_new:
+            password = st.text_input(
+                "Временный пароль (опционально — если пусто, сгенерируется автоматически)",
+                type="password",
+            )
+        col_save, col_back = st.columns(2)
+        save_clicked = col_save.form_submit_button("Сохранить", type="primary")
+        back_clicked = col_back.form_submit_button("Назад")
+
+    if back_clicked:
+        st.session_state.admin_edit_user_email = None
+        st.rerun()
+
+    if not save_clicked:
+        return
 
     try:
-        require_admin(current_user)
+        if is_new:
+            _, generated = admin_create_user(
+                current_user, email=email, name=name, role=role, password=password or None,
+            )
+            st.session_state.admin_last_password_reset = None if password else (email, generated)
+        else:
+            if name != existing.name:
+                admin_update_name(current_user, target_email=email, name=name)
+            if role != existing.role:
+                admin_set_role(current_user, target_email=email, role=role)
+            if active != existing.is_active:
+                admin_set_active(current_user, target_email=email, is_active=active)
     except AuthError as e:
         st.error(str(e))
-        return
+    else:
+        st.session_state.admin_edit_user_email = None
+        st.rerun()
 
-    st.header("Администрирование пользователей")
+
+def _render_admin_users_section(current_user: CurrentUser) -> None:
+    from abkit.auth.service import admin_reset_password
+    from abkit.db.repositories import UserRepo
 
     users = UserRepo().list_all()
-    rows = [
-        {
-            "email": u.email,
-            "имя": u.name,
-            "роль": u.role,
-            "активен": "да" if u.is_active else "нет",
-            "создан": u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "-",
-            "последний вход": u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "-",
-        }
-        for u in users
-    ]
-    st.dataframe(pd.DataFrame(rows), hide_index=True)
 
-    st.divider()
-    st.subheader("Создать пользователя")
-    with st.form("admin_create_user_form"):
-        new_email = st.text_input("Email")
-        new_name = st.text_input("Имя")
-        new_role = st.selectbox("Роль", _ROLE_OPTIONS, index=0)
-        new_password = st.text_input(
-            "Временный пароль (опционально — если пусто, сгенерируется автоматически)",
-            type="password",
-        )
-        submitted = st.form_submit_button("Создать", type="primary")
-    if submitted:
-        try:
-            _, generated = admin_create_user(
-                current_user, email=new_email, name=new_name, role=new_role,
-                password=new_password or None,
-            )
-        except AuthError as e:
-            st.error(str(e))
-        else:
-            st.success(f"Пользователь «{new_email}» создан.")
-            if not new_password:
-                st.info(f"Временный пароль (сохраните — показывается один раз): `{generated}`")
+    if st.session_state.get("admin_last_password_reset"):
+        reset_email, generated = st.session_state.admin_last_password_reset
+        st.info(f"Временный пароль для «{reset_email}» (сохраните — показывается один раз): `{generated}`")
+        if st.button("Скрыть", key="admin_dismiss_password_banner"):
+            st.session_state.admin_last_password_reset = None
             st.rerun()
 
-    if not users:
+    if st.session_state.get("admin_edit_user_email"):
+        _render_admin_user_form(current_user, users)
         return
 
-    emails = [u.email for u in users]
+    col_title, col_add = st.columns([5, 1])
+    col_title.markdown("**Пользователи**")
+    if col_add.button("+ Добавить", key="admin_add_user_btn"):
+        st.session_state.admin_edit_user_email = "__new__"
+        st.rerun()
 
-    st.divider()
-    st.subheader("Изменить роль")
-    col1, col2, col3 = st.columns([2, 2, 1])
-    role_email = col1.selectbox("Пользователь", emails, key="admin_role_email")
-    new_role_value = col2.selectbox("Новая роль", _ROLE_OPTIONS, key="admin_role_value")
-    if col3.button("Применить", key="admin_role_apply"):
-        try:
-            admin_set_role(current_user, target_email=role_email, role=new_role_value)
-        except AuthError as e:
-            st.error(str(e))
-        else:
-            st.success(f"Роль «{role_email}» изменена на «{new_role_value}».")
+    if not users:
+        st.info("Пользователей пока нет.")
+        return
+
+    widths = [2, 3, 1.2, 1, 1.6, 1.6, 0.7, 0.7, 0.7]
+    header_cols = st.columns(widths)
+    for col, label in zip(
+        header_cols, ["Имя", "Email", "Роль", "Активен", "Создан", "Последний вход", "", "", ""]
+    ):
+        col.markdown(f"**{label}**")
+
+    for u in users:
+        cols = st.columns(widths)
+        cols[0].write(u.name)
+        cols[1].write(u.email)
+        cols[2].write(u.role)
+        cols[3].write("✅" if u.is_active else "🚫")
+        cols[4].write(u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "-")
+        cols[5].write(u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "-")
+        if cols[6].button("✏️", key=f"admin_edit_{u.id}", help="Изменить"):
+            st.session_state.admin_edit_user_email = u.email
             st.rerun()
+        if cols[7].button("🔑", key=f"admin_reset_{u.id}", help="Сбросить пароль"):
+            try:
+                generated = admin_reset_password(current_user, target_email=u.email)
+            except AuthError as e:
+                st.error(str(e))
+            else:
+                st.session_state.admin_last_password_reset = (u.email, generated)
+                st.rerun()
+        block_help = "Заблокировать" if u.is_active else "Разблокировать"
+        if cols[8].button("🚫" if u.is_active else "✅", key=f"admin_toggle_{u.id}", help=block_help):
+            try:
+                from abkit.auth.service import admin_set_active
 
-    st.divider()
-    st.subheader("Блокировка / разблокировка")
-    col1, col2 = st.columns([3, 1])
-    active_email = col1.selectbox("Пользователь", emails, key="admin_active_email")
-    current_active = next((u.is_active for u in users if u.email == active_email), True)
-    action_label = "Заблокировать" if current_active else "Разблокировать"
-    if col2.button(action_label, key="admin_active_toggle"):
-        try:
-            admin_set_active(current_user, target_email=active_email, is_active=not current_active)
-        except AuthError as e:
-            st.error(str(e))
-        else:
-            st.success(f"«{active_email}»: {'заблокирован' if current_active else 'разблокирован'}.")
-            st.rerun()
+                admin_set_active(current_user, target_email=u.email, is_active=not u.is_active)
+            except AuthError as e:
+                st.error(str(e))
+            else:
+                st.rerun()
 
-    st.divider()
-    st.subheader("Сбросить пароль")
-    col1, col2 = st.columns([3, 1])
-    reset_email = col1.selectbox("Пользователь", emails, key="admin_reset_email")
-    if col2.button("Сбросить", key="admin_reset_btn"):
-        try:
-            generated = admin_reset_password(current_user, target_email=reset_email)
-        except AuthError as e:
-            st.error(str(e))
-        else:
-            st.success(f"Пароль «{reset_email}» сброшен.")
-            st.info(f"Временный пароль (сохраните — показывается один раз): `{generated}`")
 
-    st.divider()
-    st.subheader("Аудит")
+def _render_admin_audit_section() -> None:
     from datetime import datetime, time as dt_time
 
-    from abkit.db.repositories import AuditRepo
+    from abkit.db.repositories import AuditRepo, UserRepo
+
+    st.subheader("Аудит")
+    users = UserRepo().list_all()
+    emails = [u.email for u in users]
 
     col1, col2 = st.columns(2)
     filter_email = col1.selectbox("Пользователь", ["(все)"] + emails, key="admin_audit_user")
@@ -1534,13 +1716,33 @@ def render_admin_tab(current_user: CurrentUser | None) -> None:
         st.dataframe(_audit_log_to_df(entries), hide_index=True)
 
 
+def render_admin_tab(current_user: CurrentUser | None) -> None:
+    from abkit.auth.guards import require_admin
+
+    try:
+        require_admin(current_user)
+    except AuthError as e:
+        st.error(str(e))
+        return
+
+    st.header("Администрирование")
+    users_subtab, audit_subtab = st.tabs(["👤 Пользователи", "📋 Аудит"])
+    with users_subtab:
+        _render_admin_users_section(current_user)
+    with audit_subtab:
+        _render_admin_audit_section()
+
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
 
 
 def render_sidebar(experiments_dir: Path, current_user: CurrentUser | None = None) -> None:
-    st.sidebar.title("abkit")
+    st.sidebar.markdown(
+        "<h2 style='margin:0; padding:0.2rem 0 0.6rem 0; font-weight:800;'>🧪 abkit</h2>",
+        unsafe_allow_html=True,
+    )
     if current_user is not None:
         st.sidebar.caption(f"{current_user.email} · {current_user.role}")
         if st.sidebar.button("Выйти", key="logout_btn"):
@@ -1560,6 +1762,15 @@ def render_sidebar(experiments_dir: Path, current_user: CurrentUser | None = Non
 
 def main() -> None:
     st.set_page_config(page_title="abkit", page_icon="🧪", layout="wide")
+    st.markdown(
+        """<style>
+        /* поднимаем табы к верху страницы — не обрезаются, но лишний воздух
+        над ними убран (стандартный отступ Streamlit — под "шапку" тулбара) */
+        .block-container { padding-top: 2rem; }
+        [data-testid="stSidebarContent"] { padding-top: 0.5rem; }
+        </style>""",
+        unsafe_allow_html=True,
+    )
 
     current_user: CurrentUser | None = None
     if _db_mode():
@@ -1577,8 +1788,6 @@ def main() -> None:
 
     experiments_dir = storage.get_experiments_dir()
     render_sidebar(experiments_dir, current_user)
-
-    st.title("abkit — дизайн и анализ A/B тестов")
 
     tab_labels = ["Design", "Analyze", "Experiments", "Validation"]
     if current_user is not None and current_user.role == "admin":

@@ -211,6 +211,24 @@ def admin_set_active(acting_user: CurrentUser, *, target_email: str, is_active: 
     )
 
 
+def admin_update_name(acting_user: CurrentUser, *, target_email: str, name: str) -> None:
+    """Email намеренно не редактируется здесь — это логин пользователя, смена
+    требует отдельной проверки уникальности и переизобретения токена сессии,
+    что выходит за рамки формы редактирования (UI показывает email как
+    read-only, см. app.py)."""
+    require_admin(acting_user)
+    user = UserRepo().get_by_email(target_email)
+    if user is None:
+        raise AuthError(f"Пользователь '{target_email}' не найден")
+    old_name = user.name
+    UserRepo().update_name(user.id, name)
+    _audit(
+        action="user.name_change", user_id=uuid_mod.UUID(acting_user.id), user_email=acting_user.email,
+        object_type="user", object_id=str(user.id), object_name=target_email,
+        details={"from": old_name, "to": name},
+    )
+
+
 def self_register(*, email: str, name: str, password: str) -> str:
     """DOCKER.md §4.2: ABKIT_ALLOW_SELF_REGISTRATION=true включает страницу
     самостоятельной регистрации, новый пользователь получает роль Viewer."""

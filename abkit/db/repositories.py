@@ -93,6 +93,13 @@ class UserRepo:
                 raise RepoError(f"Пользователь {user_id} не найден")
             user.is_active = is_active
 
+    def update_name(self, user_id: uuid_mod.UUID, name: str) -> None:
+        with session_scope() as s:
+            user = s.get(User, user_id)
+            if user is None:
+                raise RepoError(f"Пользователь {user_id} не найден")
+            user.name = name
+
     def set_password_hash(
         self, user_id: uuid_mod.UUID, password_hash: str, must_change_password: bool = False
     ) -> None:
@@ -248,6 +255,27 @@ class AssignmentRepo:
             )
             if exclude_experiment_ids:
                 stmt = stmt.where(Experiment.id.notin_(exclude_experiment_ids))
+            rows = s.execute(stmt).all()
+        occupied: dict[str, set[str]] = {}
+        for name, unit_id in rows:
+            occupied.setdefault(name, set()).add(unit_id)
+        return occupied
+
+    def occupied_units_for_selected_experiments(
+        self, experiment_ids: set[uuid_mod.UUID]
+    ) -> dict[str, set[str]]:
+        """Как occupied_units_for_active_experiments, но "только эти конкретные
+        эксперименты" вместо "все активные КРОМЕ этих" (UI: изоляция
+        exclude_selected) — и все равно только среди активных статусов."""
+        if not experiment_ids:
+            return {}
+        with session_scope() as s:
+            stmt = (
+                select(Experiment.name, Assignment.unit_id)
+                .join(Assignment, Assignment.experiment_id == Experiment.id)
+                .where(Experiment.status.in_(_ACTIVE_STATUSES))
+                .where(Experiment.id.in_(experiment_ids))
+            )
             rows = s.execute(stmt).all()
         occupied: dict[str, set[str]] = {}
         for name, unit_id in rows:

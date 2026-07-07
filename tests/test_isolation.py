@@ -107,3 +107,37 @@ def test_isolation_no_active_experiments_no_exclusion(tmp_path):
     result = isolation.apply_isolation(data, "user_id", tmp_path, mode="exclude")
     assert result.n_excluded == 0
     assert result.n_available == 10
+
+
+def test_isolation_exclude_selected_only_filters_named_experiments(tmp_path):
+    _setup_other_experiment(tmp_path, "exp_a", [f"u{i}" for i in range(10, 15)])
+    _setup_other_experiment(tmp_path, "exp_b", [f"u{i}" for i in range(20, 25)])
+
+    data = make_candidates(30)
+    result = isolation.apply_isolation(
+        data, "user_id", tmp_path, mode="exclude_selected", selected_experiments=["exp_a"]
+    )
+
+    # exp_a выбран явно -> его юзеры исключены, exp_b не выбран -> не исключен,
+    # хотя тоже активен (в отличие от mode="exclude", где было бы наоборот)
+    assert result.excluded_by_experiment == {"exp_a": 5}
+    remaining = set(result.candidates["user_id"])
+    assert "u10" not in remaining
+    assert "u20" in remaining
+
+
+def test_isolation_exclude_selected_ignores_archived_even_if_named(tmp_path):
+    """Пользователь из archived-эксперимента доступен для нового дизайна — даже
+    если этот archived-эксперимент явно назван в selected_experiments (UI не
+    должен давать выбрать archived, но бэкенд подстраховывается тоже)."""
+    _setup_other_experiment(tmp_path, "archived_exp", [f"u{i}" for i in range(0, 5)], status="running")
+    storage.update_status(tmp_path, "archived_exp", "archived")
+
+    data = make_candidates(10)
+    result = isolation.apply_isolation(
+        data, "user_id", tmp_path, mode="exclude_selected", selected_experiments=["archived_exp"]
+    )
+
+    assert result.excluded_by_experiment == {}
+    assert result.n_excluded == 0
+    assert set(result.candidates["user_id"]) == set(data["user_id"])

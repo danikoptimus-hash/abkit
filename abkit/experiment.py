@@ -116,7 +116,12 @@ class DesignReport:
 
 
 def infer_control_name(groups: dict[str, float]) -> str:
-    return "control" if "control" in groups else next(iter(groups))
+    """Регистронезависимый поиск группы "control" (UI по умолчанию называет ее
+    "Control") — если группы нет вовсе, откат на первую по порядку добавления."""
+    for name in groups:
+        if name.lower() == "control":
+            return name
+    return next(iter(groups))
 
 
 def build_metric_context(
@@ -211,6 +216,25 @@ def metric_history_values(metric: MetricConfig, data: pd.DataFrame) -> pd.Series
     if metric.name in data.columns:
         return data[metric.name]
     return data[metric.pre_col]
+
+
+def compute_metric_baseline_mean(metric: MetricConfig, data: pd.DataFrame) -> float | None:
+    """Baseline (среднее) метрики по данным дизайна — используется UI (app.py)
+    для перевода абсолютного MDE в относительный. None, если посчитать нельзя
+    (нужных колонок нет в данных) — вызывающая сторона должна показать
+    понятную ошибку, а не упасть."""
+    if metric.type == "ratio":
+        if not metric.num or not metric.den:
+            return None
+        if metric.num not in data.columns or metric.den not in data.columns:
+            return None
+        mean, _variance = power.delta_method_variance(data[metric.num], data[metric.den])
+        return float(mean)
+    if metric.name in data.columns:
+        return float(data[metric.name].mean())
+    if metric.pre_col and metric.pre_col in data.columns:
+        return float(data[metric.pre_col].mean())
+    return None
 
 
 AggMethod = Literal["sum", "max", "last", "first"]
@@ -451,6 +475,7 @@ class Experiment:
             exclude_experiments=config.exclude_experiments,
             current_experiment_name=config.name,
             store=isolation_store,
+            selected_experiments=config.isolation_selected_experiments,
         )
         candidates = isolation_result.candidates
         if len(candidates) == 0:

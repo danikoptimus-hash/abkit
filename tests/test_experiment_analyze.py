@@ -388,6 +388,117 @@ def test_analyze_uses_cuped_by_default_when_pre_col_configured(tmp_path):
     assert results["revenue"][0].variance_reduction > 0.3
 
 
+def test_detailed_rows_includes_all_comparisons_sorted_by_metric_then_method(tmp_path):
+    """UX11: детальная таблица результатов должна включать ВСЕ вычисленные
+    сравнения (designed и exploratory), отсортированные по (метрика, метод)."""
+    experiment = design_simple_experiment(tmp_path)
+    rng = np.random.default_rng(12)
+    assignments = experiment.assignments
+    n = len(assignments)
+    post_data = pd.DataFrame(
+        {
+            "user_id": assignments["unit_id"],
+            "revenue": rng.normal(100, 20, size=n),
+            "clicks": rng.binomial(1, 0.10, size=n),
+        }
+    )
+    results = experiment.analyze(post_data, compare_methods=True)
+    control_name = results.context["control_name"]
+
+    rows = results.detailed_rows(control_name)
+    assert len(rows) == len(results.results)
+    # ровно одна designed-строка на пару (metric, treatment_group)
+    designed_rows = [r for r in rows if r["designed"]]
+    assert len(designed_rows) == len(results.metrics)
+
+    keys = [(r["metric"], r["method"]) for r in rows]
+    assert keys == sorted(keys)
+
+    for row in rows:
+        assert row["group"] == f"treatment vs {control_name}"
+        assert row["n_control"] is not None and row["n_test"] is not None
+        assert row["verdict"] in ("significant_positive", "significant_negative", "no_effect_detected")
+        assert row["correction_method"] == results.context["correction"]
+
+
+def test_detailed_rows_labels_variance_reduction_technique(tmp_path):
+    rng = np.random.default_rng(13)
+    n = 4000
+    pre = rng.normal(100, 20, size=n)
+    design_data = pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(n)],
+            "revenue": pre * 0.8 + rng.normal(0, 10, size=n),
+            "revenue_pre": pre,
+        }
+    )
+    config = DesignConfig(
+        name="cuped_detailed_rows_exp",
+        unit_col="user_id",
+        groups={"control": 0.5, "treatment": 0.5},
+        metrics=[MetricConfig(name="revenue", type="continuous", pre_col="revenue_pre")],
+        sample_size=n,
+        split_method="simple",
+        seed=1,
+    )
+    experiment = Experiment.design(config, design_data, experiments_dir=tmp_path)
+    assignments = experiment.assignments
+    pre2 = rng.normal(100, 20, size=n)
+    post_data = pd.DataFrame(
+        {
+            "user_id": assignments["unit_id"],
+            "revenue": pre2 * 0.8 + rng.normal(0, 10, size=n),
+            "revenue_pre": pre2,
+        }
+    )
+    results = experiment.analyze(post_data)
+    rows = results.detailed_rows(results.context["control_name"])
+    row = next(r for r in rows if r["metric"] == "revenue")
+    assert row["variance_reduction"].startswith("CUPED (")
+
+
+def test_detailed_rows_no_variance_reduction_shows_dash(tmp_path):
+    experiment = design_simple_experiment(tmp_path)
+    rng = np.random.default_rng(14)
+    assignments = experiment.assignments
+    n = len(assignments)
+    post_data = pd.DataFrame(
+        {
+            "user_id": assignments["unit_id"],
+            "revenue": rng.normal(100, 20, size=n),
+            "clicks": rng.binomial(1, 0.10, size=n),
+        }
+    )
+    results = experiment.analyze(post_data)
+    rows = results.detailed_rows(results.context["control_name"])
+    assert all(r["variance_reduction"] == "—" for r in rows)
+
+
+def test_detailed_display_rows_have_russian_column_headers(tmp_path):
+    experiment = design_simple_experiment(tmp_path)
+    rng = np.random.default_rng(15)
+    assignments = experiment.assignments
+    n = len(assignments)
+    post_data = pd.DataFrame(
+        {
+            "user_id": assignments["unit_id"],
+            "revenue": rng.normal(100, 20, size=n),
+            "clicks": rng.binomial(1, 0.10, size=n),
+        }
+    )
+    results = experiment.analyze(post_data)
+    rows = results.detailed_display_rows(results.context["control_name"])
+    assert rows
+    expected_columns = {
+        "Метрика", "Группа сравнения", "Метод", "Designed", "Эффект (абс)",
+        "Эффект (отн, %)", "95% ДИ (отн.)", "p-value", "p-adj", "Коррекция",
+        "n (control)", "n (test)", "Снижение дисперсии", "Вердикт",
+    }
+    assert set(rows[0].keys()) == expected_columns
+    designed_row = next(r for r in rows if r["Designed"] == "✓")
+    assert designed_row is not None
+
+
 def test_analyze_compare_methods_adds_alternative_chains(tmp_path):
     experiment = design_simple_experiment(tmp_path)
     rng = np.random.default_rng(11)

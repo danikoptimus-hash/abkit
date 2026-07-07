@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import jinja2
+import pandas as pd
 import yaml
 from markupsafe import Markup
 
@@ -17,6 +18,7 @@ from abkit.viz.plots import (
     distribution_plot,
     fig_to_html_div,
     forest_plot,
+    p99_clip_stats,
     segment_forest_plot,
 )
 
@@ -63,15 +65,26 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
             control_series = metric_raw.get(control_name)
             if control_series is None:
                 continue
+            metric_type = metric_config.type if metric_config else "continuous"
             fig = distribution_plot(
                 control_series,
                 treat_series,
                 metric_name=metric_name,
-                metric_type=metric_config.type if metric_config else "continuous",
+                metric_type=metric_type,
                 control_name=control_name,
                 treat_name=treat_name,
             )
-            distribution_htmls.append((treat_name, fig_to_html_div(fig)))
+            caption = None
+            if metric_type != "binary":
+                combined = pd.concat([control_series.dropna(), treat_series.dropna()])
+                threshold, n_above, pct_above = p99_clip_stats(combined)
+                if n_above > 0:
+                    caption = (
+                        f"Для наглядности ось ограничена 99-м перцентилем ({threshold:.4g}). "
+                        f"{n_above} наблюдений ({pct_above:.1f}%) выше порога собраны в "
+                        "последний столбец."
+                    )
+            distribution_htmls.append((treat_name, fig_to_html_div(fig), caption))
 
         segment_htmls = []
         for treat_name, seg_list in segment_results.get(metric_name, {}).items():
@@ -111,6 +124,9 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
             )
         )
 
+    detailed_rows = results.detailed_display_rows(control_name)
+    detailed_columns = list(detailed_rows[0].keys()) if detailed_rows else []
+
     template = _env.get_template("report.html.j2")
     return template.render(
         experiment_name=context["experiment_name"],
@@ -123,6 +139,8 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
         correction=context["correction"],
         global_warnings=results.global_warnings,
         metric_sections=metric_sections,
+        detailed_columns=detailed_columns,
+        detailed_rows=detailed_rows,
         abkit_version=abkit_version,
         seed=config.seed,
         config_yaml=yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True, sort_keys=False),

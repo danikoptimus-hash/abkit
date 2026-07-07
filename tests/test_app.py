@@ -26,14 +26,37 @@ def test_app_boots_without_exceptions_and_has_four_tabs(tmp_path, monkeypatch):
     assert len(at.tabs) == 4
 
 
+def test_tab_content_does_not_leak_across_tabs_file_mode(tmp_path, monkeypatch):
+    """UX0 (regression): содержимое одного таба не должно просачиваться в
+    другой — например, заголовок "Реестр экспериментов" не должен быть виден
+    в дереве Design-таба, и наоборот. Файловый режим -> 4 таба, без Admin."""
+    at = _fresh_app(tmp_path, monkeypatch)
+    assert not at.exception
+
+    own_headers = [
+        "Дизайн эксперимента",
+        "Анализ по фактическим данным",
+        "Реестр экспериментов",
+        "Валидация симуляциями",
+    ]
+    assert len(at.tabs) == len(own_headers)
+    for i, tab in enumerate(at.tabs):
+        tab_headers = [h.value for h in tab.header]
+        assert tab_headers == [own_headers[i]], (
+            f"Таб {i} ({own_headers[i]}) содержит посторонние заголовки: {tab_headers}"
+        )
+
+
 def test_design_tab_has_onboarding_explanation(tmp_path, monkeypatch):
     at = _fresh_app(tmp_path, monkeypatch)
     design_tab = at.tabs[0]
 
     subheaders = [s.value for s in design_tab.subheader]
-    assert any("Шаг 1" in s for s in subheaders)
+    assert any("Загрузите данные о ваших пользователях-кандидатах" in s for s in subheaders)
+    assert not any("Шаг 1" in s for s in subheaders)
 
     expander_labels = [e.label for e in design_tab.expander]
+    assert any("данные и что в них должно быть" in label for label in expander_labels)
     assert any("Пример" in label for label in expander_labels)
     assert any("SQL" in label for label in expander_labels)
     assert any("просто попробовать" in label for label in expander_labels)
@@ -345,6 +368,84 @@ def test_analyze_tab_shows_help_expanders_under_charts_and_tables(tmp_path, monk
     assert any("Сегментные разрезы" in w.value for w in analyze_tab.warning)
 
 
+def test_analyze_tab_distribution_chart_has_p99_clip_toggle_and_caption(tmp_path, monkeypatch):
+    """UX10: гистограммы continuous-метрик по умолчанию обрезаны по P99 (с
+    подписью-caption), а st.toggle "Показать полный диапазон" (выключен по
+    умолчанию) снимает обрезку."""
+    at = _fresh_app(tmp_path, monkeypatch)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "демо-данные" in b.label).click().run(timeout=30)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "Спроектировать" in b.label).click().run(timeout=30)
+    assert not at.exception
+
+    analyze_tab = at.tabs[1]
+    next(b for b in analyze_tab.button if "Сгенерировать" in b.label).click().run(timeout=30)
+    analyze_tab = at.tabs[1]
+    next(b for b in analyze_tab.button if "Проанализировать" in b.label).click().run(timeout=60)
+    assert not at.exception
+
+    analyze_tab = at.tabs[1]
+    toggles = [t for t in analyze_tab.toggle if t.key and t.key.startswith("dist_full_range_")]
+    assert toggles
+    assert all(t.value is False for t in toggles)
+    captions = [c.value for c in analyze_tab.caption]
+    assert any("99-м перцентилем" in c and "последний столбец" in c for c in captions)
+
+    n_clip_captions_before = sum("99-м перцентилем" in c for c in captions)
+
+    toggles[0].set_value(True).run(timeout=30)
+    assert not at.exception
+    analyze_tab = at.tabs[1]
+    captions_after = [c.value for c in analyze_tab.caption]
+    n_clip_captions_after = sum("99-м перцентилем" in c for c in captions_after)
+    # включили "полный диапазон" для одной метрики -> хотя бы одной P99-подписью меньше
+    assert n_clip_captions_after < n_clip_captions_before
+
+
+def test_analyze_tab_shows_detailed_results_table_and_csv_download(tmp_path, monkeypatch):
+    """UX11: "Детальная таблица результатов" со всеми колонками (эффекты, ДИ,
+    p-value/p-adj, n control/test, снижение дисперсии, вердикт) + кнопка
+    скачивания CSV."""
+    at = _fresh_app(tmp_path, monkeypatch)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "демо-данные" in b.label).click().run(timeout=30)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "Спроектировать" in b.label).click().run(timeout=30)
+    assert not at.exception
+
+    analyze_tab = at.tabs[1]
+    next(b for b in analyze_tab.button if "Сгенерировать" in b.label).click().run(timeout=30)
+    analyze_tab = at.tabs[1]
+    next(b for b in analyze_tab.button if "Проанализировать" in b.label).click().run(timeout=60)
+    assert not at.exception
+
+    analyze_tab = at.tabs[1]
+    assert any("Детальная таблица результатов" in m.value for m in analyze_tab.markdown)
+
+    dfs = analyze_tab.dataframe
+    detailed_df = next(
+        d.value for d in dfs
+        if {"Метрика", "Группа сравнения", "Метод", "Designed", "Вердикт"} <= set(d.value.columns)
+    )
+    assert len(detailed_df) > 0
+    expected_columns = {
+        "Метрика", "Группа сравнения", "Метод", "Designed", "Эффект (абс)",
+        "Эффект (отн, %)", "95% ДИ (отн.)", "p-value", "p-adj", "Коррекция",
+        "n (control)", "n (test)", "Снижение дисперсии", "Вердикт",
+    }
+    assert expected_columns <= set(detailed_df.columns)
+    assert "✓" in detailed_df["Designed"].values
+    # отсортировано по (метрика, метод)
+    keys = list(zip(detailed_df["Метрика"], detailed_df["Метод"]))
+    assert keys == sorted(keys)
+
+    # st.download_button — отдельный тип элемента в AppTest (не st.button),
+    # доступен только через Block.get("download_button") (не через .button)
+    download_buttons = [b for b in analyze_tab.get("download_button") if b.label == "Скачать таблицу CSV"]
+    assert len(download_buttons) == 1
+
+
 def test_analyze_tab_shows_cumulative_lift_warning_and_help(tmp_path, monkeypatch):
     n = 300
     data = generate_demo_design_data(n, seed=0)
@@ -522,3 +623,52 @@ def test_experiments_tab_empty_registry_shows_info(tmp_path, monkeypatch):
     exp_tab = at.tabs[2]
     assert not at.exception
     assert any("нет" in i.value.lower() for i in exp_tab.info)
+
+
+def test_isolation_selectbox_has_human_readable_labels_and_four_modes(tmp_path, monkeypatch):
+    at = _fresh_app(tmp_path, monkeypatch)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "демо-данные" in b.label).click().run(timeout=30)
+
+    design_tab = at.tabs[0]
+    isolation_selects = [s for s in design_tab.selectbox if s.key == "design_isolation"]
+    assert len(isolation_selects) == 1
+    select = isolation_selects[0]
+    assert select.value == "exclude"
+    assert select.options == [
+        "exclude — исключить участников всех активных тестов (рекомендуется)",
+        "warn — показать пересечение и спросить подтверждение",
+        "off — не исключать никого (осознанный риск пересечения)",
+        "exclude_selected — исключить участников только выбранных тестов",
+    ]
+    # без выбора exclude_selected мультиселект экспериментов не показывается
+    assert not [ms for ms in design_tab.multiselect if ms.key == "design_isolation_selected"]
+
+
+def test_isolation_exclude_selected_multiselect_lists_only_active_experiments(tmp_path, monkeypatch):
+    """exclude_selected должен предлагать на выбор только designed/running
+    эксперименты — completed/archived не должны быть доступны для выбора
+    (и, отдельно, не должны блокировать кандидатов — см. test_isolation*.py)."""
+    n = 200
+    running_data = generate_demo_design_data(n, seed=1)
+    running_config = make_demo_design_config("running_exp", n, seed=1)
+    Experiment.design(running_config, running_data, experiments_dir=tmp_path)
+
+    archived_data = generate_demo_design_data(n, seed=2)
+    archived_config = make_demo_design_config("archived_exp", n, seed=2)
+    Experiment.design(archived_config, archived_data, experiments_dir=tmp_path)
+    storage.update_status(tmp_path, "archived_exp", "archived")
+
+    at = _fresh_app(tmp_path, monkeypatch)
+    design_tab = at.tabs[0]
+    next(b for b in design_tab.button if "демо-данные" in b.label).click().run(timeout=30)
+
+    design_tab = at.tabs[0]
+    select = next(s for s in design_tab.selectbox if s.key == "design_isolation")
+    select.set_value("exclude_selected").run(timeout=30)
+
+    design_tab = at.tabs[0]
+    assert not at.exception
+    multiselects = [ms for ms in design_tab.multiselect if ms.key == "design_isolation_selected"]
+    assert len(multiselects) == 1
+    assert multiselects[0].options == ["running_exp"]

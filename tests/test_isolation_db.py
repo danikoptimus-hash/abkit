@@ -89,3 +89,42 @@ def test_apply_isolation_without_store_uses_file_mode_unchanged(tmp_path):
     )
     assert result.n_excluded == 0
     assert len(result.candidates) == 2
+
+
+def test_apply_isolation_db_mode_exclude_selected_only_named(db_store):
+    _design(db_store, "exp_a", ["u1", "u2"], status="running")
+    _design(db_store, "exp_b", ["u3", "u4"], status="running")
+
+    candidates = pd.DataFrame({"user_id": ["u1", "u2", "u3", "u4", "u5"]})
+    result = apply_isolation(
+        data=candidates,
+        unit_col="user_id",
+        experiments_dir=None,
+        mode="exclude_selected",
+        store=db_store,
+        selected_experiments=["exp_a"],
+    )
+
+    assert result.excluded_by_experiment == {"exp_a": 2}
+    assert set(result.candidates["user_id"]) == {"u3", "u4", "u5"}
+
+
+def test_apply_isolation_db_mode_exclude_selected_ignores_archived(db_store):
+    """Пользователь из archived-эксперимента доступен для нового дизайна в
+    db-режиме, даже если archived-эксперимент явно передан в
+    selected_experiments — SQL-запрос (occupied_units_for_selected_experiments)
+    фильтрует по _ACTIVE_STATUSES так же, как файловый режим."""
+    _design(db_store, "archived_exp", ["u1", "u2"], status="archived")
+
+    candidates = pd.DataFrame({"user_id": ["u1", "u2", "u3"]})
+    result = apply_isolation(
+        data=candidates,
+        unit_col="user_id",
+        experiments_dir=None,
+        mode="exclude_selected",
+        store=db_store,
+        selected_experiments=["archived_exp"],
+    )
+
+    assert result.n_excluded == 0
+    assert set(result.candidates["user_id"]) == {"u1", "u2", "u3"}
