@@ -103,6 +103,8 @@ export function ValidationPage() {
           style={{ width: '100%' }}
           value={experimentName}
           onChange={setExperimentName}
+          showSearch
+          optionFilterProp="label"
           options={(experiments ?? []).map((e) => ({ value: e.name, label: e.name }))}
         />
         <Dragger {...uploadProps} disabled={uploading}>

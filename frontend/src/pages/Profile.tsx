@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Card, Form, Input, Button, Typography, Alert } from 'antd'
+import { useNavigate } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 
@@ -9,11 +10,13 @@ interface ChangePasswordValues {
 }
 
 export function ProfilePage() {
-  const { user } = useAuth()
+  const { user, refresh } = useAuth()
+  const navigate = useNavigate()
   const [form] = Form.useForm<ChangePasswordValues>()
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const forced = user?.must_change_password ?? false
 
   const onFinish = async (values: ChangePasswordValues) => {
     setSubmitting(true)
@@ -24,6 +27,11 @@ export function ProfilePage() {
       if (error) throw new Error(errorMessage(error, 'Не удалось сменить пароль'))
       setSuccess(true)
       form.resetFields()
+      // Обновляем контекст (must_change_password -> false), чтобы гейт в
+      // RequireAuth перестал заворачивать на /profile, и уходим на главную —
+      // как в legacy (_render_force_password_change -> st.rerun после смены).
+      await refresh()
+      if (forced) navigate('/', { replace: true })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сменить пароль')
     } finally {
@@ -33,12 +41,22 @@ export function ProfilePage() {
 
   return (
     <Card style={{ maxWidth: 420 }}>
-      <Typography.Title level={4}>Профиль</Typography.Title>
+      <Typography.Title level={4}>{forced ? 'Смена пароля' : 'Профиль'}</Typography.Title>
+      {forced && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Требуется сменить пароль перед продолжением работы"
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Typography.Paragraph type="secondary">
         {user?.email} · роль {user?.role}
       </Typography.Paragraph>
       {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
-      {success && <Alert type="success" message="Пароль изменен" showIcon style={{ marginBottom: 16 }} />}
+      {success && !forced && (
+        <Alert type="success" message="Пароль изменен" showIcon style={{ marginBottom: 16 }} />
+      )}
       <Form form={form} layout="vertical" onFinish={onFinish} disabled={submitting}>
         <Form.Item name="old_password" label="Текущий пароль" rules={[{ required: true }]}>
           <Input.Password autoComplete="current-password" />

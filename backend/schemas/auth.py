@@ -15,6 +15,12 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    name: str
+    password: str
+
+
 class UserOut(BaseModel):
     id: str
     email: str

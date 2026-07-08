@@ -127,6 +127,10 @@ def change_own_password(current_user: CurrentUser, old_password: str, new_passwo
     if user is None or not verify_password(old_password, user.password_hash):
         raise AuthError("Текущий пароль неверен")
     repo.set_password_hash(user.id, hash_password(new_password), must_change_password=False)
+    _audit(
+        action="auth.password_changed", user_id=user.id, user_email=user.email,
+        object_type="user", object_id=str(user.id), object_name=user.email,
+    )
 
 
 def _generate_temp_password() -> str:

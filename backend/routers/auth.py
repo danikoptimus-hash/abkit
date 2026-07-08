@@ -9,11 +9,23 @@ import os
 from fastapi import APIRouter, Depends, Response
 
 from abkit.auth.guards import AuthError, CurrentUser
+from abkit.db.repositories import RepoError
 from backend.deps import COOKIE_NAME, get_current_user
 from backend.errors import APIError
-from backend.schemas.auth import ChangePasswordRequest, LoginRequest, UserOut
+from backend.schemas.auth import ChangePasswordRequest, LoginRequest, RegisterRequest, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.get("/config")
+def config() -> dict[str, bool]:
+    """Публичный (без авторизации) — фронту нужно знать до логина, показывать
+    ли ссылку/форму 'Регистрация' на странице логина (DOCKER.md §4.2)."""
+    return {
+        "self_registration_enabled": os.environ.get(
+            "ABKIT_ALLOW_SELF_REGISTRATION", "false"
+        ).lower() == "true",
+    }
 
 
 def _cookie_max_age() -> int:
@@ -58,6 +70,25 @@ def login(body: LoginRequest, response: Response) -> UserOut:
     user = current_user_from_token(token)
     assert user is not None  # только что сами создали валидный токен
     return UserOut.from_current_user(user)
+
+
+@router.post("/register", status_code=201)
+def register(body: RegisterRequest) -> dict[str, bool]:
+    """Самостоятельная регистрация (DOCKER.md §4.2) — только когда
+    ABKIT_ALLOW_SELF_REGISTRATION=true, иначе 403 (self_register сама это
+    проверяет и бросает AuthError, тут просто транспорт). Как и в legacy
+    (app.py _render_self_registration_form) — БЕЗ автологина, пользователь
+    входит отдельным шагом на той же странице логина."""
+    from abkit.auth.service import self_register
+
+    try:
+        self_register(email=body.email, name=body.name, password=body.password)
+    except AuthError as e:
+        raise APIError(403, "registration_disabled", str(e)) from e
+    except RepoError as e:
+        raise APIError(409, "already_exists", str(e)) from e
+
+    return {"ok": True}
 
 
 @router.post("/logout")

@@ -14,6 +14,27 @@ export async function loginViaUi(page: Page, email = 'admin@e2e.test', password 
   await expect(page).toHaveURL(/\/experiments$/)
 }
 
+/** Создает пользователя через admin API БЕЗ пароля -> backend сам генерирует
+ * временный и ставит must_change_password=true (см. admin_create_user) —
+ * для e2e-проверки принудительного гейта смены пароля. */
+export async function createUserWithTempPassword(
+  request: APIRequestContext,
+  email: string,
+  role = 'viewer',
+): Promise<string> {
+  const loginResp = await request.post(`${API_BASE}/auth/login`, {
+    data: { email: 'admin@e2e.test', password: 'e2epass123' },
+  })
+  if (!loginResp.ok()) throw new Error(`admin login failed: ${loginResp.status()}`)
+
+  const createResp = await request.post(`${API_BASE}/admin/users`, {
+    data: { email, name: 'Temp User', role },
+  })
+  if (!createResp.ok()) throw new Error(`create user failed: ${createResp.status()}`)
+  const body = await createResp.json()
+  return body.generated_password as string
+}
+
 /** Реальный design через API (dataset upload -> POST /design -> poll job) —
  * та же цепочка, что backend/tests/test_design_job.py, здесь для сидинга
  * данных под e2e-тесты списка/детали/удаления (не мокаем бэкенд). */

@@ -23,6 +23,12 @@ export function RequireAuth({
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />
   }
+  // Принудительная смена пароля (как в legacy _render_force_password_change,
+  // app.py) — пока флаг взведен, любой переход бросает на /profile (там же
+  // форма смены пароля), остальные страницы недоступны.
+  if (user.must_change_password && location.pathname !== '/profile') {
+    return <Navigate to="/profile" replace />
+  }
   if (minRole && !hasMinRole(user, minRole)) {
     return <Navigate to="/" replace />
   }

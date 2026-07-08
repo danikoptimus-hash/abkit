@@ -114,6 +114,60 @@ def test_login_locks_out_after_five_failed_attempts(app_client):
     assert "попыток" in resp.json()["error"]["message"]
 
 
+def test_config_reports_self_registration_disabled_by_default(app_client, monkeypatch):
+    monkeypatch.delenv("ABKIT_ALLOW_SELF_REGISTRATION", raising=False)
+    resp = app_client.get("/api/v1/auth/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"self_registration_enabled": False}
+
+
+def test_config_reports_self_registration_enabled(app_client, monkeypatch):
+    monkeypatch.setenv("ABKIT_ALLOW_SELF_REGISTRATION", "true")
+    resp = app_client.get("/api/v1/auth/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"self_registration_enabled": True}
+
+
+def test_register_returns_403_when_disabled(app_client, monkeypatch):
+    monkeypatch.delenv("ABKIT_ALLOW_SELF_REGISTRATION", raising=False)
+    resp = app_client.post(
+        "/api/v1/auth/register",
+        json={"email": "new@co.com", "name": "New", "password": "pw123456"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "registration_disabled"
+
+
+def test_register_creates_viewer_without_auto_login(app_client, monkeypatch):
+    monkeypatch.setenv("ABKIT_ALLOW_SELF_REGISTRATION", "true")
+    resp = app_client.post(
+        "/api/v1/auth/register",
+        json={"email": "selfreg@co.com", "name": "Self", "password": "pw123456"},
+    )
+    assert resp.status_code == 201
+    assert resp.json() == {"ok": True}
+    assert "abkit_session" not in resp.cookies
+
+    login_resp = app_client.post(
+        "/api/v1/auth/login", json={"email": "selfreg@co.com", "password": "pw123456"}
+    )
+    assert login_resp.status_code == 200
+    assert login_resp.json()["role"] == "viewer"
+
+
+def test_register_duplicate_email_returns_409(app_client, monkeypatch):
+    monkeypatch.setenv("ABKIT_ALLOW_SELF_REGISTRATION", "true")
+    UserRepo().create(
+        email="dup@co.com", name="D", password_hash=hash_password("pw12345"), role="viewer"
+    )
+    resp = app_client.post(
+        "/api/v1/auth/register",
+        json={"email": "dup@co.com", "name": "Dup", "password": "pw123456"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "already_exists"
+
+
 def test_openapi_schema_is_served(app_client):
     resp = app_client.get("/api/openapi.json")
     assert resp.status_code == 200

@@ -9,6 +9,11 @@ test('validation page runs A/A + A/B and shows FPR and power tables', async ({ p
 
   await page.goto('/validation')
   await page.getByRole('combobox').first().click()
+  // showSearch на Select (Validation.tsx) — печатаем имя, чтобы найти опцию
+  // среди всех экспериментов в БД без опоры на виртуализированный список
+  // (иначе на большом количестве экспериментов свежесозданная опция может
+  // не попасть в изначально отрендеренное окно rc-virtual-list).
+  await page.getByRole('combobox').first().fill(name)
   await page.getByTitle(name).click()
 
   const csv = 'user_id,revenue\n' + Array.from({ length: 200 }, (_, i) => `u${i},${100 + (i % 10)}.5`).join('\n')

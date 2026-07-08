@@ -338,3 +338,32 @@ def test_self_register_enabled_creates_viewer(auth_env, monkeypatch):
     user_id = self_register(email="selfreg@co.com", name="Self", password="pw12345")
     user = UserRepo().get_by_id(__import__("uuid").UUID(user_id))
     assert user.role == "viewer"
+
+
+def test_self_register_writes_audit_log(auth_env, monkeypatch):
+    from abkit.auth.service import self_register
+    from abkit.db.repositories import AuditRepo
+
+    monkeypatch.setenv("ABKIT_ALLOW_SELF_REGISTRATION", "true")
+    self_register(email="selfreg-audit@co.com", name="Self", password="pw12345")
+
+    entries = AuditRepo().list_recent(object_name="selfreg-audit@co.com")
+    assert len(entries) == 1
+    assert entries[0].action == "user.create"
+    assert entries[0].details == {"role": "viewer", "self_registered": True}
+
+
+def test_change_own_password_writes_audit_log(auth_env):
+    from abkit.auth.passwords import hash_password
+    from abkit.auth.service import change_own_password
+    from abkit.db.repositories import AuditRepo, UserRepo
+
+    user_id = UserRepo().create(
+        email="chg-audit@co.com", name="C", password_hash=hash_password("oldpw123"), role="viewer"
+    )
+    current = CurrentUser(id=str(user_id), email="chg-audit@co.com", name="C", role="viewer")
+    change_own_password(current, "oldpw123", "newpw456")
+
+    entries = AuditRepo().list_recent(object_name="chg-audit@co.com")
+    assert len(entries) == 1
+    assert entries[0].action == "auth.password_changed"
