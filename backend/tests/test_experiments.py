@@ -1,0 +1,168 @@
+"""R2 (FRONTEND.md §3.2): read-only API для экспериментов — список
+(пагинация/фильтры status/owner/q), детали (+design_summary passthrough),
+отчеты, выборки, результаты, аудит по эксперименту."""
+
+from __future__ import annotations
+
+from abkit.auth.passwords import hash_password
+from abkit.db.repositories import ExperimentRepo, ResultRepo, UserRepo
+
+
+def _login(app_client, email="editor@co.com", role="editor"):
+    UserRepo().create(email=email, name="E", password_hash=hash_password("pw12345"), role=role)
+    app_client.post("/api/v1/auth/login", json={"email": email, "password": "pw12345"})
+
+
+def _make_experiment(name="exp_a", status="designed", owner_id=None):
+    if owner_id is None:
+        owner_id = UserRepo().create(
+            email=f"owner_{name}@co.com", name="Owner", password_hash=hash_password("pw12345"), role="editor"
+        )
+    return ExperimentRepo().create(
+        name=name, owner_id=owner_id, status=status,
+        config={"name": name, "groups": ["control", "treatment"], "metrics": []},
+    )
+
+
+def test_list_experiments_requires_login(app_client):
+    resp = app_client.get("/api/v1/experiments")
+    assert resp.status_code == 401
+
+
+def test_list_experiments_pagination_and_filters(app_client):
+    _login(app_client)
+    _make_experiment("exp_running", status="running")
+    _make_experiment("exp_designed_1", status="designed")
+    _make_experiment("exp_designed_2", status="designed")
+
+    resp = app_client.get("/api/v1/experiments", params={"page": 1, "page_size": 2})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 2
+
+    resp_status = app_client.get("/api/v1/experiments", params={"status": "running"})
+    assert resp_status.json()["total"] == 1
+    assert resp_status.json()["items"][0]["name"] == "exp_running"
+
+    resp_q = app_client.get("/api/v1/experiments", params={"q": "designed_2"})
+    assert resp_q.json()["total"] == 1
+    assert resp_q.json()["items"][0]["name"] == "exp_designed_2"
+
+
+def test_list_experiments_filters_by_owner(app_client):
+    _login(app_client)
+    owner_a = UserRepo().create(
+        email="owner_a@co.com", name="A", password_hash=hash_password("pw12345"), role="editor"
+    )
+    owner_b = UserRepo().create(
+        email="owner_b@co.com", name="B", password_hash=hash_password("pw12345"), role="editor"
+    )
+    _make_experiment("exp_owner_a", owner_id=owner_a)
+    _make_experiment("exp_owner_b", owner_id=owner_b)
+
+    resp = app_client.get("/api/v1/experiments", params={"owner": "owner_a@co.com"})
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["name"] == "exp_owner_a"
+    assert body["items"][0]["owner_email"] == "owner_a@co.com"
+
+
+def test_get_experiment_detail_design_summary_is_null_by_default(app_client):
+    """create_experiment() никогда не заполняет design_summary (см.
+    abkit/db/store.py) — поле честно прокидывается как None, а не скрывается."""
+    _login(app_client)
+    _make_experiment("exp_detail")
+    resp = app_client.get("/api/v1/experiments/exp_detail")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["config"]["name"] == "exp_detail"
+    assert body["design_summary"] is None
+    assert body["available_reports"] == []
+    assert body["files"] == []
+
+
+def test_get_experiment_detail_404_for_missing(app_client):
+    _login(app_client)
+    resp = app_client.get("/api/v1/experiments/does_not_exist")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"
+
+
+def test_experiment_reports_and_samples_from_artifact_dir(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _make_experiment("exp_files")
+
+    exp_dir = tmp_path / "exp_files"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    (exp_dir / "design_report.html").write_text("<html>design</html>", encoding="utf-8")
+    samples_dir = exp_dir / "samples"
+    samples_dir.mkdir()
+    (samples_dir / "control.csv").write_text("unit_id\nu1\nu2\n", encoding="utf-8")
+
+    detail = app_client.get("/api/v1/experiments/exp_files").json()
+    assert detail["available_reports"] == ["design_report.html"]
+    assert any(f["path"] == "design_report.html" for f in detail["files"])
+
+    report_resp = app_client.get("/api/v1/experiments/exp_files/reports/design_report.html")
+    assert report_resp.status_code == 200
+    assert "design" in report_resp.text
+
+    bad_report = app_client.get("/api/v1/experiments/exp_files/reports/report.html")
+    assert bad_report.status_code == 404
+
+    samples_resp = app_client.get("/api/v1/experiments/exp_files/samples")
+    assert samples_resp.status_code == 200
+    samples = samples_resp.json()
+    assert len(samples) == 1
+    assert samples[0]["filename"] == "control.csv"
+    assert samples[0]["n_rows"] == 2
+
+    csv_resp = app_client.get("/api/v1/experiments/exp_files/samples/control.csv")
+    assert csv_resp.status_code == 200
+    assert "u1" in csv_resp.text
+
+    missing_csv = app_client.get("/api/v1/experiments/exp_files/samples/missing.csv")
+    assert missing_csv.status_code == 404
+
+    zip_resp = app_client.get("/api/v1/experiments/exp_files/samples.zip")
+    assert zip_resp.status_code == 200
+    assert zip_resp.headers["content-type"] == "application/zip"
+
+
+def test_experiment_samples_zip_404_when_no_samples(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _make_experiment("exp_no_samples")
+    resp = app_client.get("/api/v1/experiments/exp_no_samples/samples.zip")
+    assert resp.status_code == 404
+
+
+def test_get_results_404_then_returns_latest(app_client):
+    _login(app_client)
+    exp = _make_experiment("exp_results")
+    resp_missing = app_client.get("/api/v1/experiments/exp_results/results")
+    assert resp_missing.status_code == 404
+
+    ResultRepo().create(
+        experiment_id=exp.id, results={"metrics": [{"name": "conversion", "p_value": 0.03}]},
+        report_path="report.html",
+    )
+    resp = app_client.get("/api/v1/experiments/exp_results/results")
+    assert resp.status_code == 200
+    assert resp.json()["metrics"][0]["name"] == "conversion"
+
+
+def test_experiment_audit_visible_to_any_logged_in_user(app_client):
+    from abkit.db.repositories import AuditRepo
+
+    _login(app_client, email="viewer@co.com", role="viewer")
+    _make_experiment("exp_audit")
+    AuditRepo().log(action="design", object_type="experiment", object_name="exp_audit", user_email="someone@co.com")
+
+    resp = app_client.get("/api/v1/experiments/exp_audit/audit")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["action"] == "design"

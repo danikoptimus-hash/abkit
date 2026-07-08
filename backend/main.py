@@ -1,4 +1,4 @@
-"""FastAPI backend (REACT.md) — REST API поверх существующего ядра abkit.
+"""FastAPI backend (FRONTEND.md) — REST API поверх существующего ядра abkit.
 Точка входа: `uvicorn backend.main:app`. Streamlit (app.py) продолжает
 работать независимо на /legacy (см. docker/README.md после R7) — оба
 транспорта используют один и тот же auth/jobs/db слой и одну БД."""
@@ -13,7 +13,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.errors import register_exception_handlers
+from backend.routers import admin as admin_router
+from backend.routers import audit as audit_router
 from backend.routers import auth as auth_router
+from backend.routers import datasets as datasets_router
+from backend.routers import experiments as experiments_router
 
 
 @asynccontextmanager
@@ -40,7 +44,7 @@ def create_app() -> FastAPI:
 
     # Нужен только для локальной разработки фронта (vite dev server на другом
     # порту/origin) — в проде frontend и /api/* на одном origin через nginx
-    # (REACT.md §1), там CORS не участвует вообще.
+    # (FRONTEND.md §2), там CORS не участвует вообще.
     dev_origins = [o.strip() for o in os.environ.get("ABKIT_CORS_ORIGINS", "").split(",") if o.strip()]
     if dev_origins:
         app.add_middleware(
@@ -52,6 +56,10 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth_router.router, prefix="/api/v1")
+    app.include_router(experiments_router.router, prefix="/api/v1")
+    app.include_router(datasets_router.router, prefix="/api/v1")
+    app.include_router(admin_router.router, prefix="/api/v1")
+    app.include_router(audit_router.router, prefix="/api/v1")
 
     @app.get("/api/health")
     def health() -> dict[str, bool]:

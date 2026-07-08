@@ -324,6 +324,13 @@ class DatasetRepo:
             s.flush()
             return ds.id
 
+    def get_by_id(self, dataset_id: uuid_mod.UUID) -> Dataset | None:
+        with session_scope() as s:
+            ds = s.get(Dataset, dataset_id)
+            if ds is not None:
+                s.expunge(ds)
+            return ds
+
     def list_for_experiment(self, experiment_id: uuid_mod.UUID) -> list[Dataset]:
         with session_scope() as s:
             rows = list(
@@ -333,6 +340,15 @@ class DatasetRepo:
                     .order_by(Dataset.uploaded_at)
                 )
             )
+            for r in rows:
+                s.expunge(r)
+            return rows
+
+    def list_all(self) -> list[Dataset]:
+        """Для страницы /datasets (FRONTEND.md §5.2) — датасеты всех
+        экспериментов, не только одного."""
+        with session_scope() as s:
+            rows = list(s.scalars(select(Dataset).order_by(Dataset.uploaded_at.desc())))
             for r in rows:
                 s.expunge(r)
             return rows
@@ -421,9 +437,14 @@ class AuditRepo:
             )
             s.add(entry)
 
-    def _filtered(self, stmt, *, user_id, action, object_name, date_from, date_to):
+    def _filtered(self, stmt, *, user_id, user_email, action, object_name, date_from, date_to):
         if user_id is not None:
             stmt = stmt.where(AuditLog.user_id == user_id)
+        if user_email is not None:
+            # user_email денормализован в audit_log (переживает удаление
+            # пользователя), поэтому фильтруем по нему напрямую, а не через
+            # user_id — так находятся и записи "осиротевших" пользователей.
+            stmt = stmt.where(AuditLog.user_email == user_email)
         if action is not None:
             stmt = stmt.where(AuditLog.action == action)
         if object_name is not None:
@@ -440,6 +461,7 @@ class AuditRepo:
         limit: int = 100,
         offset: int = 0,
         user_id: uuid_mod.UUID | None = None,
+        user_email: str | None = None,
         action: str | None = None,
         object_name: str | None = None,
         date_from: datetime | None = None,
@@ -448,7 +470,7 @@ class AuditRepo:
         with session_scope() as s:
             stmt = select(AuditLog).order_by(AuditLog.ts.desc(), AuditLog.id.desc())
             stmt = self._filtered(
-                stmt, user_id=user_id, action=action, object_name=object_name,
+                stmt, user_id=user_id, user_email=user_email, action=action, object_name=object_name,
                 date_from=date_from, date_to=date_to,
             )
             stmt = stmt.offset(offset).limit(limit)
@@ -461,6 +483,7 @@ class AuditRepo:
         self,
         *,
         user_id: uuid_mod.UUID | None = None,
+        user_email: str | None = None,
         action: str | None = None,
         object_name: str | None = None,
         date_from: datetime | None = None,
@@ -469,7 +492,7 @@ class AuditRepo:
         with session_scope() as s:
             stmt = select(func.count()).select_from(AuditLog)
             stmt = self._filtered(
-                stmt, user_id=user_id, action=action, object_name=object_name,
+                stmt, user_id=user_id, user_email=user_email, action=action, object_name=object_name,
                 date_from=date_from, date_to=date_to,
             )
             return s.scalar(stmt) or 0

@@ -1,4 +1,4 @@
-"""Единый формат ошибок API (REACT.md §2.1): {"error": {"code","message","details"}}.
+"""Единый формат ошибок API (FRONTEND.md §3.1): {"error": {"code","message","details"}}.
 
 AuthError из abkit.auth.guards переиспользуется как есть (те же guard-функции,
 что и в jobs.py/app.py) — этот модуль только знает, как превратить ее (и

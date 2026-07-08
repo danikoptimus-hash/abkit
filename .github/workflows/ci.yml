@@ -31,7 +31,7 @@ jobs:
       # conftest.py (корень репозитория): если задан TEST_DATABASE_URL, тесты
       # используют его вместо поднятия своего Postgres через testcontainers
       # (см. DOCKER.md §12: "testcontainers-postgres (или docker-compose для CI)").
-      # Общий и для tests/, и для backend/tests/ (REACT.md R1+).
+      # Общий и для tests/, и для backend/tests/ (FRONTEND.md R1+).
       TEST_DATABASE_URL: postgresql+psycopg://abkit:abkit@localhost:5432/abkit
 
     steps:

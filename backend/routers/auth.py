@@ -1,6 +1,6 @@
 """POST /auth/login, POST /auth/logout, GET /auth/me, POST /auth/change-password
-(REACT.md §2.2) — та же логика, что _render_login_gate/_do_logout в app.py,
-просто транспорт HTTP+cookie вместо Streamlit session_state."""
+(FRONTEND.md §3.2) — та же логика, что _render_login_gate/_do_logout в
+app.py, просто транспорт HTTP+cookie вместо Streamlit session_state."""
 
 from __future__ import annotations
 
@@ -36,10 +36,10 @@ def _set_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=_cookie_secure(),
         # Strict, не Lax/double-submit-token: frontend и /api/* всегда на одном
-        # origin через nginx (REACT.md §1) — кросс-сайтовых запросов с этим
+        # origin через nginx (FRONTEND.md §2) — кросс-сайтовых запросов с этим
         # cookie в легитимных сценариях не бывает, значит Strict ничего не
         # ломает и не требует отдельного CSRF-токена на клиенте (выбор из
-        # REACT.md §2.1 "выбрать и обосновать").
+        # FRONTEND.md §3.1 "выбери и зафиксируй решение в комментарии").
         samesite="strict",
         path="/",
     )

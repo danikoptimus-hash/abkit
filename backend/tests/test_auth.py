@@ -1,6 +1,9 @@
-"""R1 (REACT.md): логин/logout/me/change-password через HTTP + cookie, и
-проверка, что роль ниже требуемой отклоняется (аналог
-tests/test_jobs_permission_matrix.py, но на уровне backend.deps)."""
+"""R1 (FRONTEND.md §3.1, §7): логин/logout/me/change-password через HTTP +
+cookie, rate-limit логина (переиспользуется abkit.auth.service.login —
+UserRepo.record_login_failure, тут проверяется только что HTTP-транспорт
+честно прокидывает существующую блокировку), и проверка, что роль ниже
+требуемой отклоняется (аналог tests/test_jobs_permission_matrix.py, но на
+уровне backend.deps)."""
 
 from __future__ import annotations
 
@@ -90,6 +93,25 @@ def test_change_password_wrong_old_password_400(app_client):
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "invalid_password"
+
+
+def test_login_locks_out_after_five_failed_attempts(app_client):
+    UserRepo().create(
+        email="lockout@co.com", name="L", password_hash=hash_password("realpass123"), role="editor"
+    )
+    for _ in range(5):
+        resp = app_client.post(
+            "/api/v1/auth/login", json={"email": "lockout@co.com", "password": "wrong"}
+        )
+        assert resp.status_code == 401
+
+    # 6-я попытка — уже с ПРАВИЛЬНЫМ паролем, но аккаунт заблокирован на 15 минут
+    resp = app_client.post(
+        "/api/v1/auth/login", json={"email": "lockout@co.com", "password": "realpass123"}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "invalid_credentials"
+    assert "попыток" in resp.json()["error"]["message"]
 
 
 def test_openapi_schema_is_served(app_client):
