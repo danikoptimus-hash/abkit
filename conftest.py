@@ -24,7 +24,7 @@ os.environ.setdefault("TESTCONTAINERS_RYUK_DISABLED", "true")
 
 
 def _apply_migrations(db_url: str) -> None:
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = os.path.dirname(os.path.abspath(__file__))  # conftest.py живет в корне репозитория
     env = {**os.environ, "DATABASE_URL": db_url}
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
