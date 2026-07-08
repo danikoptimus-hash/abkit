@@ -1,6 +1,7 @@
-"""Тексты «Как читать этот график/эту таблицу» — переиспользуются в Streamlit
-(st.expander) и в HTML-отчете (<details>), чтобы не дублировать объяснения
-в двух местах и не разъезжаться в формулировках.
+"""Тексты «Как читать этот график/эту таблицу» — источник для HTML-отчета
+(<details>). React-UI держит свою копию текстов (frontend/src/pages/experiment/
+helpTexts.ts, TS не может импортировать Python) — при правке текста здесь
+проверяй, не разъехалась ли формулировка там же.
 """
 
 from __future__ import annotations
@@ -162,7 +163,7 @@ def _markdown_lite_to_html(text: str) -> str:
 
 def render_help_html(chart_type: str, *, table: bool = False) -> str:
     """<details><summary>...</summary>...</details> фрагмент для HTML-отчета —
-    тот же текст, что и в Streamlit-expander (get_help_text), только в HTML."""
+    тот же текст, что и get_help_text(), только в HTML."""
     label = HELP_EXPANDER_LABEL_TABLE if table else HELP_EXPANDER_LABEL
     body_html = _markdown_lite_to_html(get_help_text(chart_type))
     return f"<details><summary>{label}</summary>{body_html}</details>"

@@ -2,19 +2,20 @@
 
 [![CI](https://github.com/danikoptimus-hash/abkit/actions/workflows/ci.yml/badge.svg)](https://github.com/danikoptimus-hash/abkit/actions/workflows/ci.yml)
 
-Библиотека + веб-интерфейс на Streamlit (плюс минимальный CLI для автоматизации)
+Библиотека + веб-интерфейс на React (плюс минимальный CLI для автоматизации)
 для дизайна и анализа A/B тестов: расчет мощности и MDE, (стратифицированное)
 сплитование, проверки честности (SRM, баланс страт, потери данных, pre-period
 A/A), пайплайн методов анализа (Welch, Z-тест пропорций, CUPED, бутстрап,
 Mann-Whitney, дельта-метод для ratio-метрик), поправка на множественность,
 HTML-отчеты и A/A/A/B-симуляции для валидации дизайна.
 
-Streamlit — основной пользовательский интерфейс (кнопки, формы, графики); CLI —
-тонкий слой поверх той же библиотеки для скриптов и автоматизации. Оба
-работают с одними и теми же `Experiment`/`AnalysisResults` и одним
-`experiments_dir`.
+Два режима: **lite** (файловый, локально, без установки чего-либо кроме
+Python — CLI и Python API ниже) и **серверный** (React-UI + FastAPI backend +
+Postgres, роли/аудит-лог, разворачивается в Docker — раздел «Серверный режим»
+ниже). Оба работают с одними и теми же `Experiment`/`AnalysisResults`.
 
-Полное техническое задание — в [`DESIGN.md`](DESIGN.md).
+Полное техническое задание — в [`DESIGN.md`](DESIGN.md) (ядро) и
+[`FRONTEND.md`](FRONTEND.md) (React-UI/backend).
 
 ## Установка
 
@@ -22,32 +23,6 @@ Streamlit — основной пользовательский интерфей
 python -m venv .venv
 .venv/Scripts/pip install -e ".[dev]"
 ```
-
-## Быстрый старт: веб-интерфейс
-
-```bash
-.venv/Scripts/streamlit run app.py
-```
-
-Откроется приложение с четырьмя табами:
-
-- **Design** — форма дизайна: загрузка исторических данных (`.csv`/`.parquet`),
-  группы, метрики, страты, MDE/размер выборки. Кнопка **«Загрузить
-  демо-данные»** сразу генерирует синтетику и заполняет форму — не нужно
-  искать свои данные, чтобы попробовать интерфейс. После сабмита — сводка
-  (размеры групп, MDE) и график, ссылка на `design_report.html`.
-- **Analyze** — выбор эксперимента, загрузка фактических данных (для demo-
-  экспериментов есть кнопка «Сгенерировать demo-данные (с эффектом)»),
-  `compare_methods`, поправка на множественность. Результат — таблица,
-  forest/distribution/segment/cumulative-графики, вердикты, скачивание
-  `report.html`/`results.json`.
-- **Experiments** — реестр экспериментов с фильтром по статусу, кнопки смены
-  статуса, просмотр уже сохраненных отчетов прямо в приложении.
-- **Validation** — A/A и A/B симуляции (`run_aa`/`run_ab`) с прогресс-баром.
-
-Сайдбар показывает список экспериментов со статусами и текущий
-`experiments_dir` (переопределяется переменной окружения
-`ABKIT_EXPERIMENTS_DIR` или `settings.yaml`).
 
 ## Быстрый старт: CLI (`abkit demo`)
 
@@ -68,8 +43,9 @@ report одной командой:
 CLI сохраняет все команды из предыдущих этапов разработки — полезно для
 скриптов, автоматизации и быстрой проверки из терминала. Интерактивный опрос
 при дизайне (когда-то через `questionary`) как основной способ работы больше
-не развивается — эта роль перешла к табу Design в Streamlit; сам режим в CLI
-не убран, но новых сценариев в нем не появится.
+не развивается — эта роль перешла к мастеру дизайна в React-UI (серверный
+режим, см. ниже); сам режим в CLI не убран, но новых сценариев в нем не
+появится.
 
 ### 1. Дизайн эксперимента
 
@@ -183,25 +159,34 @@ report_path = results.report()          # report.html + results.json
 бит-в-бит тот же `results.json` — все случайности (сплит, бутстрап) идут от
 `seed` из `config.yaml`.
 
-## Серверный режим: учетки, роли, Postgres, Docker
+## Серверный режим: React-UI, учетки, роли, Postgres, Docker
 
-Всё выше — «lite»-режим (`ABKIT_MODE=file`, дефолт): локальный
-однопользовательский инструмент, без установки чего-либо кроме Python.
+Всё выше (CLI, Python API) — «lite»-режим (`ABKIT_MODE=file`, дефолт):
+локальный однопользовательский инструмент, без установки чего-либо кроме
+Python, без веб-интерфейса.
 
-Для командной работы (общий доступ, роли Viewer/Editor/Admin, аудит-лог,
-Postgres вместо файлов) есть серверный режим (`ABKIT_MODE=db`),
+Для командной работы (веб-интерфейс, общий доступ, роли Viewer/Editor/Admin,
+аудит-лог, Postgres вместо файлов) есть серверный режим (`ABKIT_MODE=db`),
 разворачиваемый в Docker одной командой:
 
 ```bash
 git clone https://github.com/danikoptimus-hash/abkit.git && cd abkit
 cp .env.example .env   # отредактировать ABKIT_SECRET_KEY, POSTGRES_PASSWORD
 docker compose up -d
-docker compose exec app abkit-admin create-admin --email admin@co.com
+docker compose exec backend abkit-admin create-admin --email admin@co.com
+# React-UI: http://localhost:8080
 ```
 
+Веб-интерфейс: реестр экспериментов с поиском, мастер дизайна (загрузка
+исторических данных, группы/метрики/страты, MDE/размер выборки, демо-данные
+в один клик), анализ по фактическим данным (таблица, forest/distribution/
+segment/cumulative-графики, вердикты), валидация A/A и A/B симуляциями,
+управление пользователями и аудит-лог (роль Admin).
+
 Подробности — [`docker/README.md`](docker/README.md) (деплой, бэкап, импорт
-существующих файловых экспериментов) и [`DOCKER.md`](DOCKER.md) (полное
-техническое задание серверного режима).
+существующих файловых экспериментов), [`DOCKER.md`](DOCKER.md) (техническое
+задание модели ролей/аутентификации/аудита/БД) и [`FRONTEND.md`](FRONTEND.md)
+(архитектура React-UI/backend).
 
 ## Структура проекта
 
@@ -217,11 +202,12 @@ abkit/
 ├── preprocessing/          # outliers.py (RemoveOutliers, Winsorize, Log1p)
 ├── viz/                     # plots.py (plotly), report.py (jinja2)
 ├── validation/             # simulation.py (run_aa, run_ab)
-└── demo_data.py            # синтетика для abkit demo / кнопки «Загрузить демо-данные»
-app.py                      # Streamlit: табы Design / Analyze / Experiments / Validation
+└── demo_data.py            # синтетика для abkit demo / демо-данных в React-UI
 cli.py                      # typer: design, analyze, validate, status, list, demo
+backend/                    # FastAPI: REST API поверх abkit (см. FRONTEND.md)
+frontend/                   # React-UI (см. FRONTEND.md)
 templates/                  # report.html.j2, design_report.html.j2
-tests/                      # pytest: юнит + статистические/симуляционные тесты + AppTest
+tests/                      # pytest: юнит + статистические/симуляционные тесты
 ```
 
 ## Тесты
@@ -234,7 +220,6 @@ tests/                      # pytest: юнит + статистические/с
 дельта-метод держит FPR на кластерных ratio-данных) — часть обязательного
 прогона: любой рефакторинг, ломающий FPR или мощность, валит тесты.
 
-Streamlit-приложение проверяется через `streamlit.testing.v1.AppTest`
-(`tests/test_app.py`) — запускает `app.py` в headless-режиме, кликает по
-кнопкам (демо-данные → дизайн → анализ, смена статуса, просмотр отчета) и
-проверяет, что скрипт не падает и нужные элементы отрендерились.
+React-UI и backend — отдельные наборы тестов (`backend/tests/`, pytest;
+`frontend/` — typecheck/lint/build + Playwright e2e против реального docker
+compose стека), см. [`CLAUDE.md`](CLAUDE.md) и `.github/workflows/ci.yml`.

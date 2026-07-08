@@ -1,6 +1,6 @@
-"""POST /auth/login, POST /auth/logout, GET /auth/me, POST /auth/change-password
-(FRONTEND.md §3.2) — та же логика, что _render_login_gate/_do_logout в
-app.py, просто транспорт HTTP+cookie вместо Streamlit session_state."""
+"""POST /auth/login, POST /auth/logout, GET /auth/me, POST /auth/change-password,
+GET /auth/config, POST /auth/register (FRONTEND.md §3.2) — тонкая обертка
+HTTP+cookie над abkit.auth.service."""
 
 from __future__ import annotations
 

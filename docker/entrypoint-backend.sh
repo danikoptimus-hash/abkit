@@ -1,10 +1,6 @@
 #!/bin/bash
-# Старт backend-контейнера (FastAPI/uvicorn, FRONTEND.md §6). Единственный
-# entrypoint, который применяет миграции и делает bootstrap-админа — legacy
-# (Streamlit) больше этого не делает (см. entrypoint-legacy.sh), чтобы оба
-# сервиса не гонялись за одной и той же миграцией/вставкой первого юзера при
-# параллельном старте; docker-compose.yml гарантирует порядок через
-# `legacy: depends_on: backend: condition: service_healthy`.
+# Старт backend-контейнера (FastAPI/uvicorn, FRONTEND.md §6): применяет
+# миграции и делает bootstrap-админа перед запуском uvicorn.
 set -euo pipefail
 
 echo "[entrypoint-backend] Ждём доступности Postgres..."

@@ -8,8 +8,8 @@ daily_results), который Experiment.analyze() уже вычисляет и
 распределения (гистограмма+ECDF или Wilson-доли), сегменты, дневной лифт.
 
 Результат мержится в основной results.json на уровне backend (не в
-AnalysisResults.to_json(), который остается неизменным и используется CLI/
-Streamlit как раньше) — см. routers/experiments.py::_save_analysis."""
+AnalysisResults.to_json(), который остается неизменным и используется CLI как
+раньше) — см. routers/experiments.py::_save_analysis."""
 
 from __future__ import annotations
 

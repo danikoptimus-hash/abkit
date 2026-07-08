@@ -230,8 +230,8 @@ def run_aa(
     """A/A симуляция: n_sims раз фейковый сплит по конфигу -> полный пайплайн -> p-value.
 
     Критерий провала метода: 95%-ный ДИ эмпирического FPR не накрывает config.alpha.
-    progress_callback(completed, total) вызывается после каждого раунда при n_jobs=1
-    (например, для st.progress в Streamlit).
+    progress_callback(completed, total) вызывается после каждого раунда при
+    n_jobs=1 (backend/jobs.py передает его в Job.progress для поллинга из UI).
     """
     control_name = infer_control_name(config.groups)
     treatment_names = [g for g in config.groups if g != control_name]

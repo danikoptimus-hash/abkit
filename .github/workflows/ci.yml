@@ -46,7 +46,7 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Lint (pyflakes)
-        run: python -m pyflakes abkit backend tests migrations app.py cli.py cli_admin.py conftest.py
+        run: python -m pyflakes abkit backend tests migrations cli.py cli_admin.py conftest.py
 
       - name: Тесты (ядро + БД + backend)
         run: python -m pytest -q
@@ -81,7 +81,7 @@ jobs:
   e2e:
     # Playwright против реального docker compose стека (FRONTEND.md §6) — на
     # PR и вручную (workflow_dispatch), не на каждый push: поднимает полный
-    # стек (backend+legacy+frontend+postgres+nginx), это медленнее обычного
+    # стек (backend+frontend+postgres+nginx), это медленнее обычного
     # test/frontend прогона.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: [test, frontend]
@@ -176,8 +176,8 @@ jobs:
         run: docker compose down -v
 
   build-and-push:
-    # Только на push тега вида v* (например v1.4.0) — DOCKER.md §12/§7.1.
-    # Собирает оба образа (backend/legacy — общий, frontend — отдельный).
+    # Только на push тега вида v* (например v2.0.0) — DOCKER.md §12/§7.1.
+    # Собирает оба образа (backend, frontend).
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [test, frontend]
     runs-on: ubuntu-latest
@@ -200,7 +200,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Образ backend/legacy
+      - name: Образ backend
         uses: docker/build-push-action@v6
         with:
           context: .

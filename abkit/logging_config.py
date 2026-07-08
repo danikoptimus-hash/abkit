@@ -20,8 +20,7 @@ _configured = False
 
 def configure_logging() -> None:
     """Идемпотентно (кроме явного сброса) настраивает structlog. Безопасно
-    вызывать многократно (например, на каждый Streamlit rerun) — no-op после
-    первого вызова в рамках процесса."""
+    вызывать многократно — no-op после первого вызова в рамках процесса."""
     global _configured
     if _configured:
         return

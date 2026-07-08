@@ -1,7 +1,6 @@
 """FastAPI backend (FRONTEND.md) — REST API поверх существующего ядра abkit.
-Точка входа: `uvicorn backend.main:app`. Streamlit (app.py) продолжает
-работать независимо на /legacy (см. docker/README.md после R7) — оба
-транспорта используют один и тот же auth/jobs/db слой и одну БД."""
+Точка входа: `uvicorn backend.main:app`. Единственный интерфейс к БД (React-UI
++ CLI) с этапа R8 FRONTEND.md — Streamlit (app.py) удален."""
 
 from __future__ import annotations
 
@@ -33,9 +32,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # это — иначе monkeypatch не сможет корректно откатить значение после теста.
     os.environ.setdefault("ABKIT_MODE", "db")
 
-    # Fail fast — то же самое требование, что и у Streamlit-версии (app.py
-    # main(), DOCKER.md §3): без настоящего ABKIT_SECRET_KEY сервис не должен
-    # подниматься вообще, а не падать на первом логине.
+    # Fail fast (DOCKER.md §3): без настоящего ABKIT_SECRET_KEY сервис не
+    # должен подниматься вообще, а не падать на первом логине.
     from abkit.auth.tokens import get_secret_key
 
     get_secret_key()

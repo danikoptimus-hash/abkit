@@ -227,8 +227,8 @@ class AnalysisResults:
 
     def detailed_display_rows(self, control_name: str, alpha: float = 0.05) -> list[dict[str, Any]]:
         """Как detailed_rows(), но с готовыми к показу русскими заголовками
-        колонок и отформатированными значениями — единый источник для
-        Streamlit (app.py), HTML-отчета (report.py) и CSV-выгрузки (report())."""
+        колонок и отформатированными значениями — единый источник для React-UI
+        (backend/chart_data.py), HTML-отчета (report.py) и CSV-выгрузки (report())."""
         rows = self.detailed_rows(control_name, alpha=alpha)
         return [
             {

@@ -352,7 +352,7 @@ def _save_analysis(name: str, results) -> None:
     FRONTEND.md §5.2), посчитанные из results.context (raw_values/
     segment_results/daily_results), которого нет в to_json(). AnalysisResults.
     to_json() (ядро, abkit/analysis/results.py) не меняется — им по-прежнему
-    пользуются CLI и Streamlit без каких-либо отличий."""
+    пользуется CLI без каких-либо отличий."""
     import json
 
     from backend.chart_data import build_chart_data, sanitize_json_floats

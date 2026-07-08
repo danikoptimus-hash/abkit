@@ -1,9 +1,7 @@
 """DI: текущий пользователь из cookie-сессии + guard-зависимости по ролям.
 
-Cookie и верификация токена — те же abkit.auth.tokens/service, что уже
-использует Streamlit-версия (app.py) — оба транспорта ходят в одну и ту же
-модель сессий, поэтому переключаться между /legacy и React UI можно без
-повторного логина (общий cookie на весь домен, см. main.py)."""
+Cookie и верификация токена — те же abkit.auth.tokens/service, что и CLI
+(cli_admin.py) — единая модель сессий (см. main.py)."""
 
 from __future__ import annotations
 
@@ -33,7 +31,7 @@ def get_current_user(user: CurrentUser | None = Depends(get_optional_user)) -> C
 def require_min_role(min_role: str) -> Callable[[CurrentUser], CurrentUser]:
     """Фабрика зависимостей: Depends(require_min_role("editor")) — 403, если
     роли не хватает. Использует ТЕ ЖЕ abkit.auth.guards.require_role, что и
-    jobs.py — права проверяются идентично для Streamlit и React-транспорта."""
+    jobs.py — права проверяются идентично независимо от транспорта."""
 
     def _dep(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         try:

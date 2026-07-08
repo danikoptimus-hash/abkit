@@ -1,5 +1,5 @@
 // Тексты «Как читать этот график/эту таблицу» — перенесены дословно из
-// abkit/viz/help_texts.py (переиспользуются Streamlit-версией и HTML-отчетом,
+// abkit/viz/help_texts.py (тот же текст используется в HTML-отчете,
 // FRONTEND.md §5.2: "у каждого графика Collapse... существующие тексты перенести").
 
 export const HELP_TEXTS: Record<string, string> = {

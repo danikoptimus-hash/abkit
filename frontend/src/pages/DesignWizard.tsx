@@ -47,7 +47,7 @@ function stepError(step: number, state: WizardState): string | null {
 
 // Визард дизайна A/B теста (FRONTEND.md §5.2, 4 шага). Состояние — один
 // объект конфига (WizardState), поднятый в этом компоненте и передаваемый
-// шагам как props — не session_state как в Streamlit, React-состояние проще.
+// шагам как props.
 export function DesignWizardPage() {
   const [current, setCurrent] = useState(0)
   const [state, setState] = useState<WizardState>(INITIAL_STATE)
