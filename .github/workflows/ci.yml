@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -48,6 +49,37 @@ jobs:
 
       - name: Тесты
         run: python -m pytest -q
+
+  persistence-test:
+    # Опциональная джоба: docker/test_persistence.sh реально поднимает
+    # docker compose (build + up/down/force-recreate), это медленно и не
+    # нужно на каждый push/PR — запускается только вручную (Actions ->
+    # CI -> Run workflow), например перед релизом или после правок
+    # docker-compose.yml/entrypoint.sh/схемы БД. См. docker/README.md,
+    # раздел "Данные и перезапуски".
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сгенерировать .env для docker compose
+        run: |
+          cat > .env <<EOF
+          ABKIT_SECRET_KEY=$(openssl rand -hex 32)
+          POSTGRES_PASSWORD=$(openssl rand -hex 16)
+          EOF
+
+      - name: docker/test_persistence.sh
+        run: bash docker/test_persistence.sh
+
+      - name: Логи контейнеров (при падении)
+        if: failure()
+        run: docker compose logs
+
+      - name: docker compose down -v (уборка раннера)
+        if: always()
+        run: docker compose down -v
 
   build-and-push:
     # Только на push тега вида v* (например v1.4.0) — DOCKER.md §12/§7.1.
