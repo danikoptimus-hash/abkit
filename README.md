@@ -24,6 +24,11 @@ python -m venv .venv
 .venv/Scripts/pip install -e ".[dev]"
 ```
 
+Эта установка дает CLI и Python API (файловый режим, ниже) — работает локально
+без Docker. Веб-интерфейс (React-UI) доступен только в серверном режиме
+(`docker compose up`, раздел «Серверный режим» ниже) — отдельного
+no-Docker веб-UI (как раньше был Streamlit) не существует.
+
 ## Быстрый старт: CLI (`abkit demo`)
 
 Тот же познакомительный сценарий без браузера — синтетика → design → analyze →
