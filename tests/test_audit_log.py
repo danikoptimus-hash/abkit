@@ -116,7 +116,7 @@ def test_run_validate_aa_writes_validation_run_audit(editor):
     entry = _last_action(action="validation.run")
     assert entry is not None
     assert entry.object_name == "audit_val_aa_exp"
-    assert entry.details == {"kind": "aa"}
+    assert entry.details == {"kind": "aa", "dataset_id": None}
 
 
 def test_run_validate_ab_writes_validation_run_audit(editor):
@@ -128,7 +128,22 @@ def test_run_validate_ab_writes_validation_run_audit(editor):
     entry = _last_action(action="validation.run")
     assert entry is not None
     assert entry.object_name == "audit_val_ab_exp"
-    assert entry.details == {"kind": "ab"}
+    assert entry.details == {"kind": "ab", "dataset_id": None}
+
+
+def test_run_validate_aa_records_dataset_id_in_audit(editor):
+    """UX package, Validation п.C.5: which dataset a validation run used is
+    fixed in the audit_log entry, not just implied by whatever was uploaded
+    at the time."""
+    data = _design_data(seed=6, n=200)
+    jobs.run_validate_aa(
+        editor, data, _config("audit_val_aa_dsid_exp", len(data)), n_sims=5, show_progress=False,
+        dataset_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    entry = _last_action(action="validation.run")
+    assert entry is not None
+    assert entry.details == {"kind": "aa", "dataset_id": "11111111-1111-1111-1111-111111111111"}
 
 
 def test_run_update_status_writes_status_change_audit_with_from_to(editor):

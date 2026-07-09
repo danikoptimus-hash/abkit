@@ -34,7 +34,7 @@ export function ResultsSection({ experimentName, blocks, editing, onChangeBlock,
         <>
           <Typography.Paragraph type="secondary" style={{ marginTop: -4, marginBottom: 16, fontSize: 13 }}>
             Analyzed <RelativeTime iso={results.run_meta.created_at} /> with{' '}
-            {results.run_meta.dataset_filename ?? 'demo data'} (run #{results.run_meta.run_number})
+            {results.run_meta.dataset_filename ?? 'unknown dataset'} (run #{results.run_meta.run_number})
           </Typography.Paragraph>
 
           <VerdictCards results={results.results} />

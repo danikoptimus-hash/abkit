@@ -111,6 +111,21 @@ class DeletionSummary(BaseModel):
     results: int
 
 
+class BulkDeleteRequest(BaseModel):
+    names: list[str]
+    confirm: str
+
+
+class BulkDeleteSkipped(BaseModel):
+    name: str
+    reason: str
+
+
+class BulkDeleteResult(BaseModel):
+    deleted: list[str]
+    skipped: list[BulkDeleteSkipped]
+
+
 class AnalyzeRequest(BaseModel):
     dataset_id: str
     correction: str = "holm"

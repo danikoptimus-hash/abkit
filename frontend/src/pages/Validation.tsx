@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Typography, Select, Upload, Button, InputNumber, Checkbox, Space, Alert, Progress, Table, Tag } from 'antd'
-import { InboxOutlined } from '@ant-design/icons'
+import { Typography, Select, Upload, Button, InputNumber, Checkbox, Alert, Progress, Table, Tag, Collapse, Tooltip } from 'antd'
+import { InboxOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import { apiClient, errorMessage, toFormData } from '../api/client'
 import { useJobPolling } from '../api/useJobPolling'
+import { RelativeTime } from '../components/RelativeTime'
 
 const { Dragger } = Upload
 
@@ -32,11 +34,81 @@ interface MethodPower {
 interface ValidateResult {
   aa: { methods: MethodFPR[] }
   ab: { methods: MethodPower[] }
+  dataset_id: string
+  dataset_filename: string | null
+}
+
+interface RawMetric {
+  name: string
+  type: string
+  num?: string | null
+  den?: string | null
+}
+
+// Columns the simulation reads from post-period data — unit_col + strata
+// (needed to reproduce the split) + each metric's data column(s) (UX
+// package, Validation п.C.3: compatibility check for a manually uploaded
+// file, before simulations run rather than a cryptic failure mid-job).
+function requiredColumns(config: Record<string, unknown>): string[] {
+  const cols = new Set<string>()
+  const unitCol = config.unit_col as string | undefined
+  if (unitCol) cols.add(unitCol)
+  ;((config.strata as string[] | undefined) ?? []).forEach((s) => cols.add(s))
+  ;((config.metrics as RawMetric[] | undefined) ?? []).forEach((m) => {
+    if (m.type === 'ratio') {
+      if (m.num) cols.add(m.num)
+      if (m.den) cols.add(m.den)
+    } else {
+      cols.add(m.name)
+    }
+  })
+  return Array.from(cols)
+}
+
+interface DatasetInfo {
+  id: string
+  filename: string
+  nRows: number
+  columns: string[]
+  uploadedAt: string | null
+}
+
+const WHAT_IS_THIS = `**What A/A simulations do**
+
+Repeatedly split your historical data into two random groups with NO real difference between them (pure control vs control) and run the same statistical test many times. If the tool is honest, roughly 5% of these "fake" tests should come back significant just by chance — that's the false positive rate (FPR) matching alpha.
+
+**What A/B simulations do**
+
+The same repeated splitting, but with a known artificial effect injected into one group before testing. The empirical power is the share of runs that correctly detect that effect — it should roughly match the power the design predicted.
+
+**When to run this**
+
+Before an important/high-stakes test, when using a new metric type or measurement method for the first time, or when onboarding onto this tool with data patterns you haven't validated before.
+
+**How to read the result**
+
+The FPR's 95% confidence interval should cover 5% — well above means too many false positives (not honest); well below may mean overly conservative. p-values from A/A runs should be roughly uniformly distributed. For A/B, a gap of more than 5 percentage points between empirical and analytical power is flagged as a warning — it usually means the analytical power formula doesn't match how your real data behaves.`
+
+function OptionLabel({ children }: { children: ReactNode }) {
+  return (
+    <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+      {children}
+    </Typography.Text>
+  )
+}
+
+function OptionHint({ children }: { children: ReactNode }) {
+  return (
+    <Typography.Text type="secondary" style={{ display: 'block', marginTop: 2, fontSize: 12 }}>
+      {children}
+    </Typography.Text>
+  )
 }
 
 export function ValidationPage() {
   const [experimentName, setExperimentName] = useState<string | undefined>(undefined)
-  const [datasetId, setDatasetId] = useState<string | null>(null)
+  const [manualDataset, setManualDataset] = useState<DatasetInfo | null>(null)
+  const [showManualUpload, setShowManualUpload] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [nSims, setNSims] = useState(2000)
@@ -53,20 +125,83 @@ export function ValidationPage() {
     },
   })
 
+  const { data: experimentDetail } = useQuery({
+    queryKey: ['experiment-for-validation', experimentName],
+    enabled: !!experimentName,
+    queryFn: async () => {
+      const { data, error } = await apiClient.GET('/api/v1/experiments/{name}', { params: { path: { name: experimentName! } } })
+      if (error) throw new Error(errorMessage(error))
+      return data
+    },
+  })
+
+  // Auto-datasource (UX package, Validation п.C.1): the pre-design dataset
+  // already stored for this experiment, if any — 404 means none stored
+  // (older/imported experiments, п.C.4), not an error to surface loudly.
+  const { data: designDataset, isFetching: designDatasetLoading } = useQuery({
+    queryKey: ['experiment-design-dataset', experimentName],
+    enabled: !!experimentName,
+    queryFn: async () => {
+      const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/design-dataset', {
+        params: { path: { name: experimentName! } },
+      })
+      if (error) return null
+      return data
+    },
+  })
+
+  useEffect(() => {
+    setManualDataset(null)
+    setShowManualUpload(false)
+    reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [experimentName])
+
+  useEffect(() => {
+    if (!designDatasetLoading && experimentName && designDataset === null) {
+      setShowManualUpload(true)
+    }
+  }, [designDatasetLoading, experimentName, designDataset])
+
+  const activeDataset: DatasetInfo | null = showManualUpload
+    ? manualDataset
+    : designDataset
+      ? {
+          id: designDataset.id, filename: designDataset.filename, nRows: designDataset.n_rows,
+          columns: designDataset.columns, uploadedAt: designDataset.uploaded_at,
+        }
+      : null
+
   const uploadProps: UploadProps = {
     accept: '.csv',
     multiple: false,
     showUploadList: false,
+    disabled: uploading,
     customRequest: async (options) => {
       const file = options.file as File
       setUploading(true)
       setUploadError(null)
       try {
         const { data, error } = await apiClient.POST('/api/v1/datasets', {
-          body: toFormData({ kind: 'validation', file }) as unknown as { kind: string; file: string },
+          body: toFormData({ kind: 'validation', experiment_name: experimentName, file }) as unknown as {
+            kind: string
+            file: string
+          },
         })
         if (error) throw new Error(errorMessage(error))
-        setDatasetId(data.id)
+
+        if (experimentDetail) {
+          const missing = requiredColumns(experimentDetail.config).filter((c) => !data.columns.includes(c))
+          if (missing.length > 0) {
+            setUploadError(
+              `This file is missing columns required by the experiment's design: ${missing.join(', ')}`,
+            )
+            options.onError?.(new Error('missing columns'))
+            return
+          }
+        }
+
+        setManualDataset({ id: data.id, filename: data.filename, nRows: data.n_rows, columns: data.columns, uploadedAt: data.uploaded_at })
         options.onSuccess?.(data)
       } catch (e) {
         setUploadError(e instanceof Error ? e.message : 'Failed to upload file')
@@ -78,11 +213,11 @@ export function ValidationPage() {
   }
 
   const runValidate = async () => {
-    if (!experimentName || !datasetId) return
+    if (!experimentName || !activeDataset) return
     reset()
     const { data, error } = await apiClient.POST('/api/v1/experiments/{name}/validate', {
       params: { path: { name: experimentName } },
-      body: { dataset_id: datasetId, n_sims: nSims, compare_methods: compareMethods, effect },
+      body: { dataset_id: activeDataset.id, n_sims: nSims, compare_methods: compareMethods, effect },
     })
     if (error) {
       setUploadError(errorMessage(error))
@@ -91,47 +226,145 @@ export function ValidationPage() {
     await poll(data.job_id)
   }
 
-  const canSubmit = experimentName && datasetId && phase !== 'running'
+  const disabledReason = !experimentName
+    ? 'Select an experiment first'
+    : !activeDataset
+      ? 'Upload post-period data or use the experiment design data'
+      : ''
+  const canSubmit = !!activeDataset && phase !== 'running'
 
   return (
     <div>
-      <Typography.Title level={4}>Validation (A/A, A/B)</Typography.Title>
+      <Typography.Title level={4} style={{ marginBottom: 4 }}>Validation (A/A, A/B)</Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ maxWidth: 720 }}>
+        Validation checks that the statistical engine is honest on your data before you trust real test results.
+        A/A simulations verify the false positive rate stays at alpha (~5%) when there is no true effect; A/B
+        simulations verify the engine detects an effect of a given size (empirical power).
+      </Typography.Paragraph>
+      <Collapse
+        ghost
+        size="small"
+        style={{ marginBottom: 24, maxWidth: 720 }}
+        items={[
+          {
+            key: 'what',
+            label: '❓ What is this and when to use it',
+            children: <Typography.Paragraph style={{ whiteSpace: 'pre-line' }}>{WHAT_IS_THIS}</Typography.Paragraph>,
+          },
+        ]}
+      />
 
-      <Space direction="vertical" size={16} style={{ width: '100%', maxWidth: 480, marginBottom: 24 }}>
-        <Select
-          placeholder="Experiment (design config)"
-          style={{ width: '100%' }}
-          value={experimentName}
-          onChange={setExperimentName}
-          showSearch
-          optionFilterProp="label"
-          options={(experiments ?? []).map((e) => ({ value: e.name, label: e.name }))}
-        />
-        <Dragger {...uploadProps} disabled={uploading}>
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined />
-          </p>
-          <p>Simulation data (CSV)</p>
-        </Dragger>
-        <InputNumber addonBefore="n_sims" min={100} step={100} value={nSims} onChange={(v) => setNSims(v ?? 2000)} style={{ width: '100%' }} />
-        <InputNumber addonBefore="Effect (A/B)" min={0} step={0.01} value={effect} onChange={(v) => setEffect(v ?? 0.05)} style={{ width: '100%' }} />
-        <Checkbox checked={compareMethods} onChange={(e) => setCompareMethods(e.target.checked)}>
-          Compare alternative methods
-        </Checkbox>
-        <Button type="primary" disabled={!canSubmit} onClick={runValidate}>
-          Run Validation
-        </Button>
-      </Space>
+      <div style={{ maxWidth: 480 }}>
+        <Typography.Text strong>Validation options</Typography.Text>
+        <div style={{ marginTop: 8, marginBottom: 24 }}>
+          <div style={{ marginBottom: 12 }}>
+            <OptionLabel>Experiment (design config)</OptionLabel>
+            <Select
+              placeholder="Select an experiment"
+              style={{ width: '100%' }}
+              value={experimentName}
+              onChange={setExperimentName}
+              showSearch
+              optionFilterProp="label"
+              options={(experiments ?? []).map((e) => ({ value: e.name, label: e.name }))}
+            />
+          </div>
 
-      {uploadError && <Alert type="error" showIcon message={uploadError} style={{ marginBottom: 16 }} />}
+          <div style={{ marginBottom: 12 }}>
+            <OptionLabel>Number of simulations</OptionLabel>
+            <InputNumber min={100} step={100} value={nSims} onChange={(v) => setNSims(v ?? 2000)} style={{ width: '100%' }} />
+            <OptionHint>2000 = strict (a few minutes), 500 = quick check</OptionHint>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <OptionLabel>Effect (A/B)</OptionLabel>
+            <InputNumber min={0} step={0.01} value={effect} onChange={(v) => setEffect(v ?? 0.05)} style={{ width: '100%' }} />
+            <OptionHint>Injected effect for the power check — 0.05 = +5% relative lift</OptionHint>
+          </div>
+
+          <Tooltip title="Also compute FPR/power for alternative methods to compare their honesty on your data">
+            <Checkbox checked={compareMethods} onChange={(e) => setCompareMethods(e.target.checked)}>
+              Compare alternative methods
+            </Checkbox>
+          </Tooltip>
+        </div>
+
+        <Typography.Text strong>Data</Typography.Text>
+        <div style={{ marginTop: 8, marginBottom: 16 }}>
+          {!experimentName && (
+            <Typography.Text type="secondary">Select an experiment above to choose its data.</Typography.Text>
+          )}
+
+          {experimentName && !showManualUpload && designDataset && (
+            <Alert
+              type="success"
+              showIcon
+              icon={<CheckCircleOutlined />}
+              message={
+                <>
+                  <Tag color="blue" style={{ marginRight: 6 }}>From experiment design</Tag>
+                  {designDataset.filename} — {designDataset.n_rows} rows, uploaded{' '}
+                  <RelativeTime iso={designDataset.uploaded_at} />
+                </>
+              }
+              action={
+                <Button size="small" type="link" onClick={() => setShowManualUpload(true)}>
+                  Use different data
+                </Button>
+              }
+            />
+          )}
+
+          {experimentName && showManualUpload && (
+            <>
+              {designDataset === null && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="No stored design data for this experiment"
+                  style={{ marginBottom: 12 }}
+                />
+              )}
+              <Dragger {...uploadProps} style={{ marginBottom: 12 }}>
+                <p className="ant-upload-drag-icon">
+                  <InboxOutlined />
+                </p>
+                <p>Simulation data (CSV)</p>
+              </Dragger>
+              {manualDataset && (
+                <Alert
+                  type="success"
+                  showIcon
+                  icon={<CheckCircleOutlined />}
+                  style={{ marginBottom: 12 }}
+                  message={`Data ready: ${manualDataset.filename} — ${manualDataset.nRows} rows, ${manualDataset.columns.length} columns`}
+                />
+              )}
+              {designDataset && (
+                <Button size="small" onClick={() => { setShowManualUpload(false); setManualDataset(null) }}>
+                  Reset to design data
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+
+        <Tooltip title={disabledReason}>
+          <Button type="primary" disabled={!canSubmit} loading={phase === 'running'} onClick={runValidate} style={{ marginBottom: 24 }}>
+            {phase === 'running' ? 'Running validation...' : 'Run Validation'}
+          </Button>
+        </Tooltip>
+      </div>
+
+      {uploadError && <Alert type="error" showIcon message={uploadError} style={{ marginBottom: 16, maxWidth: 480 }} />}
 
       {phase === 'running' && (
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 24, maxWidth: 480 }}>
           <Progress percent={undefined} status="active" showInfo={false} />
           <Typography.Text>{stage ?? 'Running validation...'}</Typography.Text>
         </div>
       )}
-      {phase === 'failed' && error && <Alert type="error" showIcon message={error} style={{ marginBottom: 24 }} />}
+      {phase === 'failed' && error && <Alert type="error" showIcon message={error} style={{ marginBottom: 24, maxWidth: 480 }} />}
 
       {phase === 'completed' && result && <ValidationResults result={result} />}
     </div>
@@ -141,6 +374,10 @@ export function ValidationPage() {
 function ValidationResults({ result }: { result: ValidateResult }) {
   return (
     <div>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+        Validated with {result.dataset_filename ?? 'dataset'} (id {result.dataset_id.slice(0, 8)}…)
+      </Typography.Paragraph>
+
       <Typography.Title level={5}>A/A: empirical FPR (false-positive rate)</Typography.Title>
       <Table
         size="small"
@@ -163,10 +400,27 @@ function ValidationResults({ result }: { result: ValidateResult }) {
           },
         ]}
       />
+      <Collapse
+        ghost
+        size="small"
+        style={{ marginBottom: 24 }}
+        items={[
+          {
+            key: 'aa-help',
+            label: '❓ How do I read this table?',
+            children: (
+              <Typography.Paragraph>
+                Each row is one metric × method × comparison group. FPR is the share of the {result.aa.methods[0]?.n_sims ?? 'N'} A/A
+                simulations that came back significant despite no real difference — it should sit close to 5%. The verdict is
+                &quot;honest&quot; when the 95% CI covers 5%; &quot;lying&quot; means the method is producing significantly more (or fewer) false
+                positives than it claims to.
+              </Typography.Paragraph>
+            ),
+          },
+        ]}
+      />
 
-      <Typography.Title level={5} style={{ marginTop: 24 }}>
-        A/B: empirical vs analytical power
-      </Typography.Title>
+      <Typography.Title level={5}>A/B: empirical vs analytical power</Typography.Title>
       <Table
         size="small"
         rowKey={(r: MethodPower) => `${r.metric}_${r.method}_${r.treatment_group}`}
@@ -185,6 +439,24 @@ function ValidationResults({ result }: { result: ValidateResult }) {
           {
             title: 'Discrepancy', dataIndex: 'discrepancy_warning',
             render: (v: string | null) => (v ? <Tag color="warning">{v}</Tag> : '—'),
+          },
+        ]}
+      />
+      <Collapse
+        ghost
+        size="small"
+        items={[
+          {
+            key: 'ab-help',
+            label: '❓ How do I read this table?',
+            children: (
+              <Typography.Paragraph>
+                Empirical power is the share of A/B simulations (with the configured effect injected) that the method correctly
+                flagged as significant. Analytical power is what the design-time formula predicted for the same effect and sample
+                size. A gap larger than 5 percentage points between the two is flagged in the Discrepancy column — it usually means
+                the analytical formula&apos;s assumptions don&apos;t hold for this data.
+              </Typography.Paragraph>
+            ),
           },
         ]}
       />

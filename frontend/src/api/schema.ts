@@ -134,6 +134,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/experiments/bulk-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Experiments
+         * @description Bulk select + Delete on the experiments list (UX package, list п.E) —
+         *     any selected rows go in, but permission is checked PER experiment on the
+         *     server (п.E.5): rows the user can't edit are skipped, not silently
+         *     dropped or (worse) deleted anyway. Loops the existing single-experiment
+         *     delete path so each one gets its own audit_log entry, same as deleting
+         *     them one at a time.
+         */
+        post: operations["bulk_delete_experiments_api_v1_experiments_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/experiments/{name}": {
         parameters: {
             query?: never;
@@ -213,6 +238,30 @@ export interface paths {
         };
         /** Download Samples Zip */
         get: operations["download_samples_zip_api_v1_experiments__name__samples_zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/experiments/{name}/design-dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Design Dataset
+         * @description Pre-design dataset auto-attached to this experiment (Validation tab
+         *     auto-datasource, UX package Validation п.C.1) — the same data used to
+         *     design it, if design went through a dataset upload (wizard/API) and it
+         *     still exists. 404 if none (older/imported experiments, п.C.4) — frontend
+         *     falls back to manual upload.
+         */
+        get: operations["get_design_dataset_api_v1_experiments__name__design_dataset_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -362,7 +411,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/experiments/{name}/analyze/demo": {
+    "/api/v1/experiments/{name}/demo-post-data": {
         parameters: {
             query?: never;
             header?: never;
@@ -371,8 +420,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start Analyze Demo */
-        post: operations["start_analyze_demo_api_v1_experiments__name__analyze_demo_post"];
+        /**
+         * Create Demo Post Data
+         * @description "Generate demo post-period data" on the Analysis tab (UX package,
+         *     item B) — only PREPARES a post_analysis dataset (same shape as a real
+         *     upload, synchronous — generation is fast, no job needed), it does NOT
+         *     run analysis. The explicit "Run analysis" button then calls the regular
+         *     POST /{name}/analyze with this dataset_id, same as for an uploaded file.
+         *     Was previously a single job that generated data and ran analysis in one
+         *     step (POST /{name}/analyze/demo) — split so the user can see/confirm the
+         *     prepared data and current options before committing to a run.
+         */
+        post: operations["create_demo_post_data_api_v1_experiments__name__demo_post_data_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -741,6 +800,27 @@ export interface components {
             experiment_name?: string | null;
             /** File */
             file: string;
+        };
+        /** BulkDeleteRequest */
+        BulkDeleteRequest: {
+            /** Names */
+            names: string[];
+            /** Confirm */
+            confirm: string;
+        };
+        /** BulkDeleteResult */
+        BulkDeleteResult: {
+            /** Deleted */
+            deleted: string[];
+            /** Skipped */
+            skipped: components["schemas"]["BulkDeleteSkipped"][];
+        };
+        /** BulkDeleteSkipped */
+        BulkDeleteSkipped: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
@@ -1538,6 +1618,41 @@ export interface operations {
             };
         };
     };
+    bulk_delete_experiments_api_v1_experiments_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_experiment_api_v1_experiments__name__get: {
         parameters: {
             query?: never;
@@ -1768,6 +1883,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_design_dataset_api_v1_experiments__name__design_dataset_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetOut"];
                 };
             };
             /** @description Validation Error */
@@ -2099,7 +2247,7 @@ export interface operations {
             };
         };
     };
-    start_analyze_demo_api_v1_experiments__name__analyze_demo_post: {
+    create_demo_post_data_api_v1_experiments__name__demo_post_data_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2117,12 +2265,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            202: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobAccepted"];
+                    "application/json": components["schemas"]["DatasetOut"];
                 };
             };
             /** @description Validation Error */

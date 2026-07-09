@@ -3,6 +3,8 @@ import { loginViaUi, seedExperiment } from './helpers'
 
 // FRONTEND.md §7 R6: "Playwright: демо пост-данные -> анализ -> вердикты и
 // forest plot видны -> экспорт таблицы."
+// UX package (explicit run, item B): preparing demo data no longer runs
+// analysis by itself — "Run analysis" is a separate, explicit step.
 test('analyze with demo post-data shows verdicts and forest plot, then exports the table', async ({
   page,
   request,
@@ -16,6 +18,13 @@ test('analyze with demo post-data shows verdicts and forest plot, then exports t
   await page.getByRole('tab', { name: 'Analysis' }).click()
 
   await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
+  await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
+  // Preparing data must NOT have started analysis on its own.
+  await expect(
+    page.getByText(/significant positive|significant negative|no effect detected/).first(),
+  ).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'Run analysis' }).click()
   await expect(
     page.getByText(/significant positive|significant negative|no effect detected/).first(),
   ).toBeVisible({ timeout: 20_000 })
@@ -42,6 +51,46 @@ test('analyze with demo post-data shows verdicts and forest plot, then exports t
   expect(download.suggestedFilename()).toContain('detailed_results.csv')
 })
 
+test('Run analysis is disabled with a tooltip until data is prepared', async ({ page, request }) => {
+  const name = `analyze_disabled_e2e_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Analysis' }).click()
+
+  const runButton = page.getByRole('button', { name: 'Run analysis' })
+  await expect(runButton).toBeDisabled()
+  await runButton.hover({ force: true })
+  await expect(page.getByText('Upload post-period data or generate demo data first')).toBeVisible()
+
+  await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
+  await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
+  await expect(runButton).toBeEnabled()
+})
+
+test('Analysis tab layout: options above the dropzone, run button below data', async ({ page, request }) => {
+  const name = `analyze_layout_e2e_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Analysis' }).click()
+
+  const optionsBox = await page.getByText('Analysis options', { exact: true }).boundingBox()
+  const dataBox = await page.getByText('Data', { exact: true }).boundingBox()
+  const dropzoneBox = await page.getByText('Upload post-period data (CSV)').boundingBox()
+  const runButtonBox = await page.getByRole('button', { name: 'Run analysis' }).boundingBox()
+
+  expect(optionsBox).not.toBeNull()
+  expect(dataBox).not.toBeNull()
+  expect(dropzoneBox).not.toBeNull()
+  expect(runButtonBox).not.toBeNull()
+  expect(optionsBox!.y).toBeLessThan(dataBox!.y)
+  expect(dataBox!.y).toBeLessThan(dropzoneBox!.y)
+  expect(dropzoneBox!.y).toBeLessThan(runButtonBox!.y)
+})
+
 // UX package, п.3: after a first analysis, "Re-run analysis" reopens the
 // options+upload panel and a second run (with a different dataset) replaces
 // what Results shows — history isn't lost (run_meta.run_number counts up),
@@ -55,16 +104,18 @@ test('re-run analysis with a new dataset updates the results and run count', asy
   await page.goto(`/experiments/${name}`)
   await page.getByRole('tab', { name: 'Analysis' }).click()
   await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
+  await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Run analysis' }).click()
   await expect(
     page.getByText(/significant positive|significant negative|no effect detected/).first(),
   ).toBeVisible({ timeout: 20_000 })
 
   await page.getByRole('tab', { name: 'Results' }).click()
-  await expect(page.getByText(/demo data \(run #1\)/)).toBeVisible()
+  await expect(page.getByText(/demo_post_data\.csv \(run #1\)/)).toBeVisible()
 
   await page.getByRole('tab', { name: 'Analysis' }).click()
   await page.getByRole('button', { name: 'Re-run analysis' }).click()
-  await expect(page.getByRole('button', { name: 'Run Analysis' })).not.toBeVisible()
+  await expect(page.getByRole('button', { name: 'Run analysis' })).toBeDisabled()
 
   const csv =
     'user_id,revenue\n' + Array.from({ length: 200 }, (_, i) => `u_${name}_${i},${100 + (i % 10)}.5`).join('\n')
@@ -72,8 +123,9 @@ test('re-run analysis with a new dataset updates the results and run count', asy
   await page.getByText('Upload post-period data (CSV)').click()
   const fileChooser = await fileChooserPromise
   await fileChooser.setFiles({ name: 'rerun.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  await expect(page.getByText(/Data ready: rerun\.csv/)).toBeVisible()
 
-  await page.getByRole('button', { name: 'Run Analysis' }).click()
+  await page.getByRole('button', { name: 'Run analysis' }).click()
   await expect(
     page.getByText(/significant positive|significant negative|no effect detected/).first(),
   ).toBeVisible({ timeout: 20_000 })

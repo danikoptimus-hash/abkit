@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Table, Input, Select, Button, Tag, Space, message, Tooltip } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Table, Input, Select, Button, Tag, Space, message, Tooltip, Modal } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, CheckSquareOutlined, CloseOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
 import { useAuth, hasMinRole } from '../auth/AuthContext'
 import { DeleteExperimentModal } from '../components/DeleteExperimentModal'
 import { ExperimentPropertiesModal } from '../components/ExperimentPropertiesModal'
+import { BulkDeleteModal } from '../components/BulkDeleteModal'
+import type { BulkDeleteResult } from '../components/BulkDeleteModal'
 import { UserAvatarGroup } from '../components/UserAvatar'
 import { RelativeTime } from '../components/RelativeTime'
 
@@ -49,7 +51,52 @@ export function ExperimentsListPage() {
   const [editTarget, setEditTarget] = useState<string | null>(null)
   const canCreate = hasMinRole(user, 'editor')
 
+  // Bulk select (UX package, list п.E) — Superset-style: a toggle reveals a
+  // checkbox column, selecting rows shows an action bar above the table.
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectedNames, setSelectedNames] = useState<string[]>([])
+  const [bulkDeleteTarget, setBulkDeleteTarget] = useState<string[] | null>(null)
+
   const refreshList = () => queryClient.invalidateQueries({ queryKey: ['experiments'] })
+
+  const exitBulkMode = () => {
+    setBulkMode(false)
+    setSelectedNames([])
+  }
+
+  const handleBulkDeleteDone = (result: BulkDeleteResult) => {
+    setBulkDeleteTarget(null)
+    exitBulkMode()
+    refreshList()
+    if (result.skipped.length === 0) {
+      message.success(`Deleted ${result.deleted.length} experiment${result.deleted.length === 1 ? '' : 's'}`)
+    } else {
+      Modal.info({
+        title: 'Bulk delete finished',
+        content: (
+          <div>
+            <p>
+              Deleted {result.deleted.length}, skipped {result.skipped.length} (no permission):{' '}
+              {result.skipped.map((s) => s.name).join(', ')}
+            </p>
+          </div>
+        ),
+      })
+    }
+  }
+
+  // Extendable on purpose (UX package, list п.E.6) — bulk archive/export
+  // can join this array later without restructuring the action bar.
+  const bulkActions = [
+    {
+      key: 'delete',
+      label: 'Delete',
+      ariaLabel: 'Delete selected',
+      danger: true,
+      icon: <DeleteOutlined />,
+      onClick: () => setBulkDeleteTarget(selectedNames),
+    },
+  ]
 
   return (
     <div>
@@ -80,17 +127,56 @@ export function ExperimentsListPage() {
             }}
           />
         </Space>
-        {canCreate && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/experiments/new')}>
-            Create A/B Test
-          </Button>
-        )}
+        <Space>
+          {canCreate && (
+            <Button
+              icon={bulkMode ? <CloseOutlined /> : <CheckSquareOutlined />}
+              onClick={() => (bulkMode ? exitBulkMode() : setBulkMode(true))}
+            >
+              {bulkMode ? 'Cancel' : 'Bulk select'}
+            </Button>
+          )}
+          {canCreate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/experiments/new')}>
+              Create A/B Test
+            </Button>
+          )}
+        </Space>
       </Space>
+
+      {bulkMode && selectedNames.length > 0 && (
+        <Space style={{ marginBottom: 12, padding: '8px 12px', background: '#F0F5F3', borderRadius: 6 }}>
+          <span>{selectedNames.length} selected</span>
+          {bulkActions.map((action) => (
+            <Button
+              key={action.key}
+              size="small"
+              danger={action.danger}
+              icon={action.icon}
+              onClick={action.onClick}
+              aria-label={action.ariaLabel}
+            >
+              {action.label}
+            </Button>
+          ))}
+          <Button size="small" onClick={exitBulkMode}>
+            Deselect all
+          </Button>
+        </Space>
+      )}
 
       <Table
         rowKey="name"
         loading={isLoading}
         dataSource={data?.items ?? []}
+        rowSelection={
+          bulkMode
+            ? {
+                selectedRowKeys: selectedNames,
+                onChange: (keys) => setSelectedNames(keys as string[]),
+              }
+            : undefined
+        }
         pagination={{
           current: page,
           pageSize,
@@ -183,6 +269,12 @@ export function ExperimentsListPage() {
           setEditTarget(null)
           refreshList()
         }}
+      />
+
+      <BulkDeleteModal
+        names={bulkDeleteTarget}
+        onCancel={() => setBulkDeleteTarget(null)}
+        onDone={handleBulkDeleteDone}
       />
     </div>
   )

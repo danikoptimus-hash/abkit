@@ -25,12 +25,16 @@ from backend.deps import get_current_user, get_job_runner, require_min_role
 from backend.errors import APIError
 from backend.jobs.runner import JobRunner
 from backend.schemas.blocks import BlockIn, BlockOut
+from backend.schemas.datasets import DatasetOut
 from backend.schemas.design import JobAccepted
 from backend.schemas.experiments import (
     REPORT_FILENAMES,
     AnalyzeDemoRequest,
     AnalyzeRequest,
     AuditEntryOut,
+    BulkDeleteRequest,
+    BulkDeleteResult,
+    BulkDeleteSkipped,
     DeleteExperimentRequest,
     DeletionSummary,
     ExperimentDetail,
@@ -125,6 +129,37 @@ def list_experiments(
         for e in page_items
     ]
     return PaginatedExperiments(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResult)
+def bulk_delete_experiments(
+    body: BulkDeleteRequest, user: CurrentUser = Depends(require_min_role("editor")),
+) -> BulkDeleteResult:
+    """Bulk select + Delete on the experiments list (UX package, list п.E) —
+    any selected rows go in, but permission is checked PER experiment on the
+    server (п.E.5): rows the user can't edit are skipped, not silently
+    dropped or (worse) deleted anyway. Loops the existing single-experiment
+    delete path so each one gets its own audit_log entry, same as deleting
+    them one at a time."""
+    from abkit.auth.guards import AuthError
+    from abkit.jobs import run_delete_experiment
+
+    if body.confirm != "DELETE":
+        raise APIError(400, "confirmation_required", "Type DELETE to confirm")
+
+    deleted: list[str] = []
+    skipped: list[BulkDeleteSkipped] = []
+    for name in body.names:
+        exp = ExperimentRepo().get_by_name(name)
+        if exp is None:
+            skipped.append(BulkDeleteSkipped(name=name, reason="not found"))
+            continue
+        try:
+            run_delete_experiment(user, name)
+            deleted.append(name)
+        except AuthError:
+            skipped.append(BulkDeleteSkipped(name=name, reason="no permission"))
+    return BulkDeleteResult(deleted=deleted, skipped=skipped)
 
 
 def _get_last_modified(exp) -> tuple:
@@ -243,6 +278,26 @@ def download_samples_zip(name: str, user: CurrentUser = Depends(get_current_user
     return StreamingResponse(
         buffer, media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{name}_samples.zip"'},
+    )
+
+
+@router.get("/{name}/design-dataset", response_model=DatasetOut)
+def get_design_dataset(name: str, user: CurrentUser = Depends(get_current_user)) -> DatasetOut:
+    """Pre-design dataset auto-attached to this experiment (Validation tab
+    auto-datasource, UX package Validation п.C.1) — the same data used to
+    design it, if design went through a dataset upload (wizard/API) and it
+    still exists. 404 if none (older/imported experiments, п.C.4) — frontend
+    falls back to manual upload."""
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    pre_design = [d for d in DatasetRepo().list_for_experiment(exp.id) if d.kind == "pre_design"]
+    if not pre_design:
+        raise APIError(404, "not_found", f"No stored design data for experiment '{name}'")
+    latest = max(pre_design, key=lambda d: d.uploaded_at)
+    email_by_id = {u.id: u.email for u in UserRepo().list_all()}
+    return DatasetOut(
+        id=str(latest.id), experiment_id=str(exp.id), experiment_name=name,
+        kind=latest.kind, filename=latest.filename, n_rows=latest.n_rows, columns=latest.columns,
+        uploaded_by_email=email_by_id.get(latest.uploaded_by), uploaded_at=latest.uploaded_at,
     )
 
 
@@ -517,30 +572,42 @@ def start_analyze(
     return JobAccepted(job_id=str(job.id))
 
 
-@router.post("/{name}/analyze/demo", response_model=JobAccepted, status_code=202)
-def start_analyze_demo(
-    name: str, body: AnalyzeDemoRequest,
-    user: CurrentUser = Depends(require_min_role("editor")),
-    runner: JobRunner = Depends(get_job_runner),
-) -> JobAccepted:
-    _visible_or_404(_get_experiment_or_404(name), user)
+@router.post("/{name}/demo-post-data", response_model=DatasetOut, status_code=201)
+def create_demo_post_data(
+    name: str, body: AnalyzeDemoRequest, user: CurrentUser = Depends(require_min_role("editor")),
+) -> DatasetOut:
+    """"Generate demo post-period data" on the Analysis tab (UX package,
+    item B) — only PREPARES a post_analysis dataset (same shape as a real
+    upload, synchronous — generation is fast, no job needed), it does NOT
+    run analysis. The explicit "Run analysis" button then calls the regular
+    POST /{name}/analyze with this dataset_id, same as for an uploaded file.
+    Was previously a single job that generated data and ran analysis in one
+    step (POST /{name}/analyze/demo) — split so the user can see/confirm the
+    prepared data and current options before committing to a run."""
+    from abkit.demo_data import generate_demo_post_data_for_config
+    from abkit.experiment import Experiment
 
-    def _run(reporter) -> dict[str, Any]:
-        from abkit.demo_data import generate_demo_post_data_for_config
-        from abkit.experiment import Experiment
-        from abkit.jobs import run_analyze
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    experiment = Experiment.load(name)
+    data = generate_demo_post_data_for_config(experiment.config, experiment.assignments, effect=body.effect)
 
-        experiment = Experiment.load(name)
-        reporter.stage("Generating demo post-data...")
-        data = generate_demo_post_data_for_config(
-            experiment.config, experiment.assignments, effect=body.effect
-        )
-        results = run_analyze(user, experiment, data, progress_callback=reporter.stage)
-        _save_analysis(name, results, created_by=uuid_mod.UUID(user.id))
-        return {"experiment_name": name}
+    store = DbExperimentStore()
+    dest_dir = store.data_dir / name / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / f"{uuid_mod.uuid4().hex}_demo_post_data.csv"
+    data.to_csv(dest_path, index=False)
 
-    job = runner.submit("analyze_demo", uuid_mod.UUID(user.id), _run)
-    return JobAccepted(job_id=str(job.id))
+    dataset_id = DatasetRepo().create(
+        kind="post_analysis", filename="demo_post_data.csv", n_rows=len(data), columns=list(data.columns),
+        storage_path=str(dest_path), sha256=DatasetRepo.compute_sha256(data),
+        experiment_id=exp.id, uploaded_by=uuid_mod.UUID(user.id),
+    )
+    ds = DatasetRepo().get_by_id(dataset_id)
+    return DatasetOut(
+        id=str(ds.id), experiment_id=str(exp.id), experiment_name=name,
+        kind=ds.kind, filename=ds.filename, n_rows=ds.n_rows, columns=ds.columns,
+        uploaded_by_email=user.email, uploaded_at=ds.uploaded_at,
+    )
 
 
 @router.post("/{name}/validate", response_model=JobAccepted, status_code=202)
@@ -553,6 +620,7 @@ def start_validate(
 
     _visible_or_404(_get_experiment_or_404(name), user)
     data = _load_dataset_df(body.dataset_id)
+    used_dataset = DatasetRepo().get_by_id(uuid_mod.UUID(body.dataset_id))
 
     def _run(reporter) -> dict[str, Any]:
         from abkit.experiment import Experiment
@@ -568,17 +636,20 @@ def start_validate(
         aa_report = run_validate_aa(
             user, data, experiment.config, n_sims=body.n_sims,
             compare_methods=body.compare_methods, progress_callback=reporter.counts,
-            show_progress=False,
+            show_progress=False, dataset_id=body.dataset_id,
         )
         reporter.stage("A/B validation...")
         ab_report = run_validate_ab(
             user, data, experiment.config, n_sims=body.n_sims, effect=body.effect,
             compare_methods=body.compare_methods, progress_callback=reporter.counts,
-            show_progress=False,
+            show_progress=False, dataset_id=body.dataset_id,
         )
         return {
             "aa": {"methods": [dataclasses.asdict(m) for m in aa_report.methods]},
             "ab": {"methods": [dataclasses.asdict(m) for m in ab_report.methods]},
+            # UX package, Validation п.C.5: which dataset this ran on.
+            "dataset_id": body.dataset_id,
+            "dataset_filename": used_dataset.filename if used_dataset else None,
         }
 
     job = runner.submit("validate", uuid_mod.UUID(user.id), _run)

@@ -109,8 +109,12 @@ def run_analyze(
 
 
 def run_validate_aa(
-    current_user: CurrentUser, data: pd.DataFrame, config: DesignConfig, **kwargs: Any
+    current_user: CurrentUser, data: pd.DataFrame, config: DesignConfig,
+    *, dataset_id: str | None = None, **kwargs: Any,
 ):
+    """dataset_id — какие данные валидировались (UX package, Validation п.C.5:
+    "зафиксировать dataset_id, на котором она гонялась"), только для
+    audit_log — не влияет на симуляцию."""
     require_role(current_user, "editor")
     from abkit.validation.simulation import run_aa
 
@@ -118,13 +122,15 @@ def run_validate_aa(
         report = run_aa(data, config, **kwargs)
     _audit(
         current_user, "validation.run",
-        object_type="experiment", object_name=config.name, details={"kind": "aa"},
+        object_type="experiment", object_name=config.name,
+        details={"kind": "aa", "dataset_id": dataset_id},
     )
     return report
 
 
 def run_validate_ab(
-    current_user: CurrentUser, data: pd.DataFrame, config: DesignConfig, **kwargs: Any
+    current_user: CurrentUser, data: pd.DataFrame, config: DesignConfig,
+    *, dataset_id: str | None = None, **kwargs: Any,
 ):
     require_role(current_user, "editor")
     from abkit.validation.simulation import run_ab
@@ -133,7 +139,8 @@ def run_validate_ab(
         report = run_ab(data, config, **kwargs)
     _audit(
         current_user, "validation.run",
-        object_type="experiment", object_name=config.name, details={"kind": "ab"},
+        object_type="experiment", object_name=config.name,
+        details={"kind": "ab", "dataset_id": dataset_id},
     )
     return report
 

@@ -63,6 +63,26 @@ def test_run_aa_compare_methods_adds_more_chains():
     assert len(report_compare.methods) > len(report_default.methods)
 
 
+def test_run_ab_handles_integer_dtype_continuous_metric():
+    """Regression: an int64 metric column (common for real exports — e.g.
+    integer revenue/counts) used to crash effect injection with a pandas
+    dtype error on `.loc` assignment, since the injected shift is a float.
+    See abkit/validation/simulation.py::_inject_effect."""
+    rng = np.random.default_rng(0)
+    n = 2000
+    data = pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(n)],
+            "revenue": rng.integers(80, 120, size=n),
+        }
+    )
+    assert data["revenue"].dtype == np.int64
+    config = make_config(metrics=[MetricConfig(name="revenue", type="continuous")])
+    report = run_ab(data, config, n_sims=20, effect=0.1, seed=3, show_progress=False)
+    assert isinstance(report, ABReport)
+    assert len(report.methods) == 1
+
+
 def test_run_ab_detects_high_power_for_large_effect():
     data = make_data(n=3000)
     config = make_config(metrics=[MetricConfig(name="revenue", type="continuous")])

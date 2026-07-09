@@ -139,20 +139,26 @@ def test_re_analyze_creates_new_history_row_and_updates_run_meta(app_client, tmp
     assert ResultRepo().count_for_experiment(exp.id) == 2
 
 
-def test_analyze_demo_run_meta_has_no_dataset_filename(app_client, tmp_path, monkeypatch):
-    """Demo analysis has no uploaded dataset behind it — run_meta should say
-    so gracefully (null filename) rather than 500 or lie about a file."""
+def test_demo_post_data_prepares_dataset_without_running_analysis(app_client, tmp_path, monkeypatch):
+    """UX package (explicit run, item B): "Generate demo post-period data"
+    only PREPARES a dataset (synchronous, 201) — it must NOT start analysis
+    or create an analysis_results row. Running is a separate, explicit step
+    (POST .../analyze), same as for a real upload."""
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _login(app_client)
-    _design_experiment(app_client, "demo_run_meta_exp")
+    _design_experiment(app_client, "demo_prepare_exp")
 
-    resp = app_client.post("/api/v1/experiments/demo_run_meta_exp/analyze/demo", json={"effect": 0.03})
-    job = _poll_job(app_client, resp.json()["job_id"])
-    assert job["status"] == "completed", job
+    resp = app_client.post("/api/v1/experiments/demo_prepare_exp/demo-post-data", json={"effect": 0.03})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["kind"] == "post_analysis"
+    assert body["experiment_name"] == "demo_prepare_exp"
+    assert body["n_rows"] > 0
+    assert body["filename"] == "demo_post_data.csv"
 
-    results = app_client.get("/api/v1/experiments/demo_run_meta_exp/results").json()
-    assert results["run_meta"]["dataset_filename"] is None
-    assert results["run_meta"]["run_number"] == 1
+    # No analysis was run yet.
+    results_resp = app_client.get("/api/v1/experiments/demo_prepare_exp/results")
+    assert results_resp.status_code == 404
 
 
 def test_analyze_demo_generates_post_data_itself(app_client, tmp_path, monkeypatch):
@@ -160,13 +166,22 @@ def test_analyze_demo_generates_post_data_itself(app_client, tmp_path, monkeypat
     _login(app_client)
     _design_experiment(app_client, "analyze_demo_exp")
 
-    resp = app_client.post("/api/v1/experiments/analyze_demo_exp/analyze/demo", json={"effect": 0.03})
+    prepare_resp = app_client.post("/api/v1/experiments/analyze_demo_exp/demo-post-data", json={"effect": 0.03})
+    assert prepare_resp.status_code == 201, prepare_resp.text
+    dataset_id = prepare_resp.json()["id"]
+
+    resp = app_client.post(
+        "/api/v1/experiments/analyze_demo_exp/analyze", json={"dataset_id": dataset_id},
+    )
     assert resp.status_code == 202
     job = _poll_job(app_client, resp.json()["job_id"])
     assert job["status"] == "completed", job
 
     results_resp = app_client.get("/api/v1/experiments/analyze_demo_exp/results")
     assert results_resp.status_code == 200
+    # The demo dataset is a real, persisted dataset now — run_meta reports
+    # its filename (not null, unlike before this dataset was ephemeral).
+    assert results_resp.json()["run_meta"]["dataset_filename"] == "demo_post_data.csv"
 
 
 def test_analyze_requires_editor_role(app_client, tmp_path, monkeypatch):
@@ -226,6 +241,58 @@ def test_validate_runs_aa_and_ab(app_client, tmp_path, monkeypatch):
     assert "aa" in job["result"] and "ab" in job["result"]
     assert len(job["result"]["aa"]["methods"]) > 0
     assert len(job["result"]["ab"]["methods"]) > 0
+
+
+def test_validate_result_records_dataset_id_and_filename(app_client, tmp_path, monkeypatch):
+    """UX package, Validation п.C.5: the job result fixes which dataset the
+    validation ran on."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "validate_dataset_exp")
+
+    dataset_id = _upload_csv(app_client, _design_csv(n=300))
+    resp = app_client.post(
+        "/api/v1/experiments/validate_dataset_exp/validate",
+        json={"dataset_id": dataset_id, "n_sims": 20, "effect": 0.1},
+    )
+    job = _poll_job(app_client, resp.json()["job_id"], timeout=30.0)
+    assert job["status"] == "completed", job
+    assert job["result"]["dataset_id"] == dataset_id
+    assert job["result"]["dataset_filename"] == "data.csv"
+
+
+def test_get_design_dataset_returns_pre_design_dataset_for_experiment(app_client, tmp_path, monkeypatch):
+    """UX package, Validation п.C.1: auto-datasource — the pre_design
+    dataset used to design the experiment (via the wizard/API dataset
+    upload) is what Validation should auto-select."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "design_dataset_exp")
+
+    resp = app_client.get("/api/v1/experiments/design_dataset_exp/design-dataset")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "pre_design"
+    assert body["experiment_name"] == "design_dataset_exp"
+    assert body["n_rows"] > 0
+
+
+def test_get_design_dataset_404_when_none_stored(app_client, tmp_path, monkeypatch):
+    """п.C.4: an experiment with no linked pre_design dataset (e.g. created
+    directly via the repo/CLI, not the wizard) — frontend falls back to a
+    manual upload."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    from abkit.db.repositories import ExperimentRepo, UserRepo
+
+    _login(app_client)
+    owner_id = UserRepo().get_by_email("editor@co.com").id
+    ExperimentRepo().create(
+        name="no_design_dataset_exp", owner_id=owner_id, status="designed",
+        config={"name": "no_design_dataset_exp", "groups": {"control": 0.5, "treatment": 0.5}, "metrics": []},
+    )
+
+    resp = app_client.get("/api/v1/experiments/no_design_dataset_exp/design-dataset")
+    assert resp.status_code == 404
 
 
 def test_analyze_results_include_chart_data_for_continuous_binary_segments_and_daily(

@@ -71,6 +71,18 @@ def _inject_effect(
     """Инъекция эффекта: аддитивный сдвиг для continuous, флип для binary,
     мультипликативный сдвиг числителя для ratio."""
     merged = merged.copy()
+    # Effect injection always produces float values (additive/multiplicative
+    # shifts) — an int64 source column (e.g. an integer revenue column,
+    # common in real exports) would otherwise raise a pandas dtype error on
+    # `.loc` assignment; upcast the columns we're about to write to first.
+    for metric in metrics:
+        if metric.type == "ratio":
+            if metric.num in merged.columns:
+                merged[metric.num] = merged[metric.num].astype("float64")
+        elif metric.type != "binary":
+            col = metric.name if metric.name in merged.columns else metric.pre_col
+            if col in merged.columns:
+                merged[col] = merged[col].astype("float64")
     for metric in metrics:
         for treat_name in treatment_names:
             mask = (merged["group"] == treat_name).to_numpy()

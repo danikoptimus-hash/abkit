@@ -204,3 +204,66 @@ def test_deletion_summary_forbidden_for_non_owner(app_client):
     _login(app_client, email="not_owner5@co.com", role="editor")
     resp = app_client.get("/api/v1/experiments/delsum_exp/deletion-summary")
     assert resp.status_code == 403
+
+
+def test_bulk_delete_requires_exact_confirm_text(app_client):
+    owner_id = _login(app_client)
+    _make_experiment("bulk_del_confirm_exp", owner_id=owner_id)
+
+    resp = app_client.post(
+        "/api/v1/experiments/bulk-delete",
+        json={"names": ["bulk_del_confirm_exp"], "confirm": "delete"},
+    )
+    assert resp.status_code == 400
+    assert ExperimentRepo().get_by_name("bulk_del_confirm_exp") is not None
+
+
+def test_bulk_delete_removes_owned_experiments(app_client):
+    owner_id = _login(app_client)
+    _make_experiment("bulk_del_a", owner_id=owner_id)
+    _make_experiment("bulk_del_b", owner_id=owner_id)
+
+    resp = app_client.post(
+        "/api/v1/experiments/bulk-delete",
+        json={"names": ["bulk_del_a", "bulk_del_b"], "confirm": "DELETE"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(body["deleted"]) == ["bulk_del_a", "bulk_del_b"]
+    assert body["skipped"] == []
+    assert ExperimentRepo().get_by_name("bulk_del_a") is None
+    assert ExperimentRepo().get_by_name("bulk_del_b") is None
+
+
+def test_bulk_delete_skips_experiments_without_permission_and_missing_names(app_client):
+    """UX package, list п.E.5: mixed selection — the caller's own experiment
+    is deleted, someone else's is skipped (no permission), a nonexistent
+    name is skipped too, and the response reports both outcomes."""
+    owner_id = _login(app_client)
+    other_owner = UserRepo().create(
+        email="owner_bulkdel_other@co.com", first_name="O", password_hash=hash_password("pw12345"), role="editor"
+    )
+    _make_experiment("bulk_del_own", owner_id=owner_id)
+    _make_experiment("bulk_del_others", owner_id=other_owner)
+
+    resp = app_client.post(
+        "/api/v1/experiments/bulk-delete",
+        json={"names": ["bulk_del_own", "bulk_del_others", "bulk_del_missing"], "confirm": "DELETE"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted"] == ["bulk_del_own"]
+    skipped_by_name = {s["name"]: s["reason"] for s in body["skipped"]}
+    assert skipped_by_name["bulk_del_others"] == "no permission"
+    assert skipped_by_name["bulk_del_missing"] == "not found"
+    assert ExperimentRepo().get_by_name("bulk_del_own") is None
+    assert ExperimentRepo().get_by_name("bulk_del_others") is not None
+
+
+def test_bulk_delete_requires_editor_role(app_client):
+    _login(app_client, email="viewer_bulkdel@co.com", role="viewer")
+    resp = app_client.post(
+        "/api/v1/experiments/bulk-delete",
+        json={"names": ["whatever"], "confirm": "DELETE"},
+    )
+    assert resp.status_code == 403
