@@ -413,6 +413,10 @@ class DatasetRepo:
         sha256: str,
         experiment_id: uuid_mod.UUID | None = None,
         uploaded_by: uuid_mod.UUID | None = None,
+        source: str = "upload",
+        connection_id: uuid_mod.UUID | None = None,
+        sql_text: str | None = None,
+        fetched_at: datetime | None = None,
     ) -> uuid_mod.UUID:
         with session_scope() as s:
             ds = Dataset(
@@ -424,10 +428,29 @@ class DatasetRepo:
                 storage_path=storage_path,
                 sha256=sha256,
                 uploaded_by=uploaded_by,
+                source=source,
+                connection_id=connection_id,
+                sql_text=sql_text,
+                fetched_at=fetched_at,
             )
             s.add(ds)
             s.flush()
             return ds.id
+
+    def update_after_refresh(
+        self, dataset_id: uuid_mod.UUID, *, n_rows: int, columns: list[str], sha256: str
+    ) -> None:
+        """POST /datasets/{id}/refresh (source='sql', DB2): re-ran sql_text,
+        parquet on disk was overwritten in place — update the row's stats to
+        match, storage_path/sql_text/connection_id are unchanged."""
+        with session_scope() as s:
+            ds = s.get(Dataset, dataset_id)
+            if ds is None:
+                raise RepoError(f"Dataset {dataset_id} not found")
+            ds.n_rows = n_rows
+            ds.columns = columns
+            ds.sha256 = sha256
+            ds.fetched_at = datetime.now(timezone.utc)
 
     def get_by_id(self, dataset_id: uuid_mod.UUID) -> Dataset | None:
         with session_scope() as s:
@@ -471,6 +494,17 @@ class DatasetRepo:
     @staticmethod
     def compute_sha256(data: pd.DataFrame) -> str:
         return hashlib.sha256(pd.util.hash_pandas_object(data, index=True).to_numpy().tobytes()).hexdigest()
+
+    @staticmethod
+    def compute_sha256_from_file(path: str) -> str:
+        """Streaming file-byte hash — for source='sql' datasets (DB2), which
+        are written to parquet chunk-by-chunk without ever materializing the
+        full DataFrame in memory; compute_sha256(df) would defeat that."""
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
 
     def count_for_experiment(self, experiment_id: uuid_mod.UUID) -> int:
         with session_scope() as s:

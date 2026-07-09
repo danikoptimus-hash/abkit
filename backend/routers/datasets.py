@@ -1,6 +1,8 @@
 """FRONTEND.md §3.2/§5.2: список, предпросмотр и загрузка датасетов
-(Dataset.storage_path — CSV, как и все текущие загрузки в app.py через
-st.file_uploader + pd.read_csv).
+(Dataset.storage_path — CSV для source='upload'/'demo', parquet для
+source='sql', см. abkit/dataset_files.py::read_dataset_file — как и все
+текущие загрузки в app.py через st.file_uploader + pd.read_csv, теперь
+dispatch по расширению файла).
 
 Загрузка (POST) стримится на диск с лимитом ABKIT_MAX_UPLOAD_MB (.env.example).
 experiment_name (не "experiment_id" буквально из FRONTEND.md §3.2) — весь
@@ -16,15 +18,17 @@ import os
 import uuid as uuid_mod
 from pathlib import Path
 
-import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from abkit.auth.guards import CurrentUser
-from abkit.db.repositories import DatasetRepo, ExperimentRepo, UserRepo
+from abkit.dataset_files import read_dataset_file
+from abkit.db.repositories import DatabaseConnectionRepo, DatasetRepo, ExperimentRepo, UserRepo
 from abkit.db.store import DbExperimentStore
-from backend.deps import get_current_user, require_min_role
+from backend.deps import get_current_user, get_job_runner, require_min_role
 from backend.errors import APIError
+from backend.jobs.runner import JobRunner
 from backend.schemas.datasets import (
+    DatasetFromSqlRequest,
     DatasetOut,
     DatasetPreview,
     DemoDesignDatasetResponse,
@@ -32,19 +36,23 @@ from backend.schemas.datasets import (
     MetricBaselineResponse,
     PaginatedDatasets,
 )
+from backend.schemas.design import JobAccepted
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 _VALID_KINDS = ("pre_design", "post_analysis", "validation")
 
 
-def _to_dataset_out(d, exp_name_by_id: dict, email_by_id: dict) -> DatasetOut:
+def _to_dataset_out(d, exp_name_by_id: dict, email_by_id: dict, connection_name_by_id: dict) -> DatasetOut:
     return DatasetOut(
         id=str(d.id), experiment_id=str(d.experiment_id) if d.experiment_id else None,
         experiment_name=exp_name_by_id.get(d.experiment_id),
         kind=d.kind, filename=d.filename, n_rows=d.n_rows, columns=d.columns,
         uploaded_by_email=email_by_id.get(d.uploaded_by) if d.uploaded_by else None,
-        uploaded_at=d.uploaded_at,
+        uploaded_at=d.uploaded_at, source=d.source,
+        connection_id=str(d.connection_id) if d.connection_id else None,
+        connection_name=connection_name_by_id.get(d.connection_id) if d.connection_id else None,
+        sql_text=d.sql_text, fetched_at=d.fetched_at,
     )
 
 
@@ -61,8 +69,9 @@ def list_datasets(
 
     exp_name_by_id = {e.id: e.name for e in ExperimentRepo().list_all()}
     email_by_id = {u.id: u.email for u in UserRepo().list_all()}
+    connection_name_by_id = {c.id: c.display_name for c in DatabaseConnectionRepo().list_all()}
 
-    items = [_to_dataset_out(d, exp_name_by_id, email_by_id) for d in page_items]
+    items = [_to_dataset_out(d, exp_name_by_id, email_by_id, connection_name_by_id) for d in page_items]
     return PaginatedDatasets(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -113,20 +122,20 @@ def upload_dataset(
     _stream_upload_to_disk(file, dest_path)
 
     try:
-        data = pd.read_csv(dest_path)
+        data = read_dataset_file(str(dest_path))
     except Exception as e:
         dest_path.unlink(missing_ok=True)
-        raise APIError(422, "validation_error", f"Failed to read CSV: {e}") from e
+        raise APIError(422, "validation_error", f"Failed to read file: {e}") from e
 
     dataset_id = DatasetRepo().create(
         kind=kind, filename=file.filename, n_rows=len(data), columns=list(data.columns),
         storage_path=str(dest_path), sha256=DatasetRepo.compute_sha256(data),
-        experiment_id=experiment_id, uploaded_by=uuid_mod.UUID(user.id),
+        experiment_id=experiment_id, uploaded_by=uuid_mod.UUID(user.id), source="upload",
     )
     ds = DatasetRepo().get_by_id(dataset_id)
     exp_name_by_id = {experiment_id: experiment_name} if experiment_id else {}
     email_by_id = {uuid_mod.UUID(user.id): user.email}
-    out = _to_dataset_out(ds, exp_name_by_id, email_by_id)
+    out = _to_dataset_out(ds, exp_name_by_id, email_by_id, {})
     out.dtypes = {col: str(dtype) for col, dtype in data.dtypes.items()}
     return out
 
@@ -150,7 +159,7 @@ def preview_dataset(
     if ds is None:
         raise APIError(404, "not_found", f"Dataset '{dataset_id}' not found")
     try:
-        preview_df = pd.read_csv(ds.storage_path, nrows=rows)
+        preview_df = read_dataset_file(ds.storage_path, nrows=rows)
     except OSError as e:
         raise APIError(404, "not_found", "Dataset file is not available on disk") from e
 
@@ -200,7 +209,7 @@ def create_demo_design_dataset(
     dataset_id = DatasetRepo().create(
         kind="pre_design", filename="demo_design.csv", n_rows=len(data), columns=list(data.columns),
         storage_path=str(dest_path), sha256=DatasetRepo.compute_sha256(data),
-        uploaded_by=uuid_mod.UUID(user.id),
+        uploaded_by=uuid_mod.UUID(user.id), source="demo",
     )
     return DemoDesignDatasetResponse(
         dataset_id=str(dataset_id), suggested_config=demo_config.model_dump(mode="json")
@@ -226,7 +235,49 @@ def get_metric_baseline(
     if ds is None:
         raise APIError(404, "not_found", f"Dataset '{dataset_id}' not found")
 
-    data = pd.read_csv(ds.storage_path)
+    data = read_dataset_file(ds.storage_path)
     metric = MetricConfig(name=body.name, type=body.type, pre_col=body.pre_col, num=body.num, den=body.den)
     baseline_mean = compute_metric_baseline_mean(metric, data)
     return MetricBaselineResponse(baseline_mean=baseline_mean)
+
+
+@router.post("/from-sql", response_model=JobAccepted, status_code=202)
+def create_dataset_from_sql(
+    body: DatasetFromSqlRequest,
+    user: CurrentUser = Depends(require_min_role("editor")),
+    runner: JobRunner = Depends(get_job_runner),
+) -> JobAccepted:
+    """DB2 (CLAUDE.md dataset-from-SQL feature): materializes a SELECT query
+    against a saved connection to parquet, streamed chunk-by-chunk (not
+    materializing the full result in memory) — same async job mechanism as
+    design/analyze/validate, with progress ("Fetched N rows...")."""
+    if body.kind not in _VALID_KINDS:
+        raise APIError(422, "validation_error", f"kind must be one of {_VALID_KINDS}")
+
+    def _run(reporter) -> dict:
+        from abkit.jobs import run_create_dataset_from_sql
+
+        return run_create_dataset_from_sql(
+            user, connection_id=body.connection_id, sql=body.sql, name=body.name,
+            kind=body.kind, experiment_id=body.experiment_id, progress_callback=reporter.stage,
+        )
+
+    job = runner.submit("dataset_from_sql", uuid_mod.UUID(user.id), _run)
+    return JobAccepted(job_id=str(job.id))
+
+
+@router.post("/{dataset_id}/refresh", response_model=JobAccepted, status_code=202)
+def refresh_sql_dataset(
+    dataset_id: str,
+    user: CurrentUser = Depends(require_min_role("editor")),
+    runner: JobRunner = Depends(get_job_runner),
+) -> JobAccepted:
+    """DB2: re-runs a source='sql' dataset's stored sql_text, overwriting
+    its parquet file in place and bumping fetched_at."""
+    def _run(reporter) -> dict:
+        from abkit.jobs import run_refresh_sql_dataset
+
+        return run_refresh_sql_dataset(user, dataset_id, progress_callback=reporter.stage)
+
+    job = runner.submit("dataset_refresh", uuid_mod.UUID(user.id), _run)
+    return JobAccepted(job_id=str(job.id))

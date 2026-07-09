@@ -31,10 +31,18 @@ def _human_readable_message(exc: BaseException) -> str:
     никогда не должно долетать до UI — полная трассировка уже ушла в лог
     (см. вызов ниже), сюда — только общая фраза."""
     from abkit import checks, storage
+    from abkit.db_connections.sql_dataset import SqlExecutionError
+    from abkit.db_connections.sql_guard import SqlValidationError
     from abkit.experiment import DesignError
     from abkit.pipeline import PipelineError
 
-    if isinstance(exc, (checks.AnalysisError, DesignError, PipelineError, storage.StorageError)):
+    if isinstance(
+        exc,
+        (
+            checks.AnalysisError, DesignError, PipelineError, storage.StorageError,
+            SqlValidationError, SqlExecutionError,
+        ),
+    ):
         return str(exc)
     return "Internal processing error"
 

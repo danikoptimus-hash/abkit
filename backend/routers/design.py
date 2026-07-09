@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 
 from abkit.auth.guards import CurrentUser
 from abkit.config import DesignConfig
+from abkit.dataset_files import read_dataset_file
 from abkit.db.repositories import DatasetRepo
 from backend.deps import get_job_runner, require_min_role
 from backend.errors import APIError
@@ -71,7 +72,7 @@ def start_design(
     confirmed = body.confirmed
     # unit_col как str: иначе числовой ID с ведущими нулями ("007123")
     # необратимо теряет их при авто-парсинге pandas в int64.
-    data = pd.read_csv(dataset.storage_path, dtype={config.unit_col: str})
+    data = read_dataset_file(dataset.storage_path, dtype={config.unit_col: str})
 
     def _run(reporter: ProgressReporter) -> dict[str, Any]:
         from abkit.jobs import run_design

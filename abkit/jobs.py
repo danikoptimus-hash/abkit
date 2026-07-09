@@ -308,3 +308,112 @@ def run_update_experiment_properties(
             "visible_roles": visible_roles,
         },
     )
+
+
+def _connection_spec(conn_row):
+    from abkit.db_connections.crypto import decrypt_password
+    from abkit.db_connections.engines import ConnectionSpec
+
+    return ConnectionSpec(
+        engine=conn_row.engine, host=conn_row.host, port=conn_row.port, database=conn_row.database,
+        username=conn_row.username, password=decrypt_password(conn_row.password_encrypted),
+        ssl=conn_row.ssl, extra_params=conn_row.extra_params,
+    )
+
+
+def run_create_dataset_from_sql(
+    current_user: CurrentUser,
+    *,
+    connection_id: str,
+    sql: str,
+    name: str,
+    kind: str,
+    experiment_id: str | None = None,
+    progress_callback: Any = None,
+) -> dict[str, Any]:
+    """POST /datasets/from-sql (DB2, CLAUDE.md dataset-from-SQL feature) —
+    materializes a SELECT query result to parquet (streamed, see
+    abkit.db_connections.sql_dataset) and registers it as a normal dataset,
+    source='sql'. Editor+, same right as an uploaded dataset."""
+    require_role(current_user, "editor")
+    from datetime import datetime, timezone
+
+    from abkit import storage
+    from abkit.db.repositories import DatabaseConnectionRepo, DatasetRepo
+    from abkit.db.store import DbExperimentStore
+    from abkit.db_connections.sql_dataset import execute_select_to_parquet
+
+    conn_row = DatabaseConnectionRepo().get_by_id(uuid_mod.UUID(connection_id))
+    if conn_row is None:
+        raise storage.StorageError(f"Database connection '{connection_id}' not found")
+
+    store = DbExperimentStore()
+    dest_path = store.data_dir / "_uploads" / f"{uuid_mod.uuid4().hex}_{name}.parquet"
+
+    def _progress(n_rows: int) -> None:
+        if progress_callback is not None:
+            progress_callback(f"Fetched {n_rows} rows...")
+
+    with _timed(
+        "create_dataset_from_sql", user=current_user.email, connection=conn_row.display_name,
+    ):
+        result = execute_select_to_parquet(
+            _connection_spec(conn_row), sql, dest_path, progress_callback=_progress
+        )
+        sha256 = DatasetRepo.compute_sha256_from_file(str(dest_path))
+        exp_uuid = uuid_mod.UUID(experiment_id) if experiment_id else None
+        dataset_id = DatasetRepo().create(
+            kind=kind, filename=f"{name}.parquet", n_rows=result.n_rows, columns=result.columns,
+            storage_path=str(dest_path), sha256=sha256, experiment_id=exp_uuid,
+            uploaded_by=uuid_mod.UUID(current_user.id), source="sql", connection_id=conn_row.id,
+            sql_text=sql, fetched_at=datetime.now(timezone.utc),
+        )
+    _audit(
+        current_user, "dataset.create_from_sql",
+        object_type="dataset", object_id=str(dataset_id), object_name=name,
+        details={
+            "connection": conn_row.display_name, "n_rows": result.n_rows, "truncated": result.truncated,
+        },
+    )
+    return {"dataset_id": str(dataset_id), "n_rows": result.n_rows, "truncated": result.truncated}
+
+
+def run_refresh_sql_dataset(
+    current_user: CurrentUser, dataset_id: str, progress_callback: Any = None,
+) -> dict[str, Any]:
+    """POST /datasets/{id}/refresh (DB2) — re-runs the dataset's stored
+    sql_text against its connection, overwriting the parquet in place.
+    Editor+ (same right as creating a dataset)."""
+    require_role(current_user, "editor")
+    from pathlib import Path
+
+    from abkit import storage
+    from abkit.db.repositories import DatabaseConnectionRepo, DatasetRepo
+    from abkit.db_connections.sql_dataset import execute_select_to_parquet
+
+    ds = DatasetRepo().get_by_id(uuid_mod.UUID(dataset_id))
+    if ds is None:
+        raise storage.StorageError(f"Dataset '{dataset_id}' not found")
+    if ds.source != "sql" or not ds.sql_text or ds.connection_id is None:
+        raise storage.StorageError(f"Dataset '{ds.filename}' was not created from SQL — cannot refresh")
+
+    conn_row = DatabaseConnectionRepo().get_by_id(ds.connection_id)
+    if conn_row is None:
+        raise storage.StorageError("The database connection for this dataset no longer exists")
+
+    def _progress(n_rows: int) -> None:
+        if progress_callback is not None:
+            progress_callback(f"Fetched {n_rows} rows...")
+
+    with _timed("refresh_sql_dataset", user=current_user.email, dataset=ds.filename):
+        result = execute_select_to_parquet(
+            _connection_spec(conn_row), ds.sql_text, Path(ds.storage_path), progress_callback=_progress
+        )
+        sha256 = DatasetRepo.compute_sha256_from_file(ds.storage_path)
+        DatasetRepo().update_after_refresh(ds.id, n_rows=result.n_rows, columns=result.columns, sha256=sha256)
+    _audit(
+        current_user, "dataset.refresh",
+        object_type="dataset", object_id=str(ds.id), object_name=ds.filename,
+        details={"n_rows": result.n_rows, "truncated": result.truncated},
+    )
+    return {"dataset_id": str(ds.id), "n_rows": result.n_rows, "truncated": result.truncated}

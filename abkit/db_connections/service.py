@@ -157,3 +157,16 @@ def test_draft_connection(
         details={"engine": engine, "outcome": result.outcome},
     )
     return result
+
+
+def preview_connection_sql(current_user: CurrentUser, conn_id: uuid_mod.UUID, sql: str):
+    """POST /db-connections/{id}/preview (DB2) — editor+, not admin-only:
+    used from the Datasets page "From SQL" flow, not connection management."""
+    require_role(current_user, "editor")
+    from abkit import storage
+    from abkit.db_connections.sql_dataset import preview_select
+
+    conn = DatabaseConnectionRepo().get_by_id(conn_id)
+    if conn is None:
+        raise storage.StorageError(f"Database connection '{conn_id}' not found")
+    return preview_select(_spec_from_row(conn), sql)

@@ -17,6 +17,25 @@ class DatasetOut(BaseModel):
     dtypes: dict[str, str] | None = None
     uploaded_by_email: str | None
     uploaded_at: datetime
+    source: str = "upload"
+    connection_id: str | None = None
+    connection_name: str | None = None
+    sql_text: str | None = None
+    fetched_at: datetime | None = None
+
+
+class DatasetFromSqlRequest(BaseModel):
+    connection_id: str
+    sql: str
+    name: str
+    kind: str
+    experiment_id: str | None = None
+
+
+class DatasetFromSqlResult(BaseModel):
+    dataset_id: str
+    n_rows: int
+    truncated: bool
 
 
 class PaginatedDatasets(BaseModel):

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from abkit.auth.guards import CurrentUser
+from abkit.dataset_files import read_dataset_file
 from abkit.db.repositories import AuditRepo, BlockRepo, DatasetRepo, ExperimentRepo, UserRepo
 from abkit.db.store import DbExperimentStore
 from backend.deps import get_current_user, get_job_runner, require_min_role
@@ -509,9 +510,10 @@ def _load_dataset_df(dataset_id: str, unit_col: str | None = None) -> pd.DataFra
     if dataset is None:
         raise APIError(404, "not_found", f"Dataset '{dataset_id}' not found")
     # unit_col как str: иначе числовой ID с ведущими нулями ("007123")
-    # необратимо теряет их при авто-парсинге pandas в int64.
+    # необратимо теряет их при авто-парсинге pandas в int64 (CSV-датасеты —
+    # parquet, source='sql', уже хранит dtype как есть).
     dtype = {unit_col: str} if unit_col else None
-    return pd.read_csv(dataset.storage_path, dtype=dtype)
+    return read_dataset_file(dataset.storage_path, dtype=dtype)
 
 
 def _save_analysis(

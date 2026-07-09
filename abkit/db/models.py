@@ -142,6 +142,7 @@ class Dataset(Base):
         CheckConstraint(
             "kind IN ('pre_design','post_analysis','validation')", name="ck_datasets_kind"
         ),
+        CheckConstraint("source IN ('upload','sql','demo')", name="ck_datasets_source"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -166,6 +167,15 @@ class Dataset(Base):
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # DB2 (dataset-from-SQL, CLAUDE.md): source distinguishes how the parquet
+    # was produced — 'sql' datasets carry connection_id/sql_text so
+    # POST /datasets/{id}/refresh can re-run the same query later.
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="upload")
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("database_connections.id", ondelete="SET NULL"), nullable=True
+    )
+    sql_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AnalysisResult(Base):

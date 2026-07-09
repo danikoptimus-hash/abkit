@@ -19,11 +19,16 @@ from backend.schemas.db_connections import (
     CreateDatabaseConnectionRequest,
     DatabaseConnectionOut,
     PatchDatabaseConnectionRequest,
+    SqlPreviewRequest,
+    SqlPreviewResponse,
     TestConnectionResult,
     TestDraftConnectionRequest,
 )
 
 router = APIRouter(prefix="/admin/db-connections", tags=["db-connections"])
+# Not admin-gated: used from the Datasets page's "From SQL" flow (DB2), by
+# any editor+ building a dataset — separate from connection management.
+public_router = APIRouter(prefix="/db-connections", tags=["db-connections"])
 
 
 def _to_out(c) -> DatabaseConnectionOut:
@@ -99,3 +104,25 @@ def test_draft_db_connection(
         username=body.username, password=body.password, ssl=body.ssl, extra_params=body.extra_params,
     )
     return TestConnectionResult(outcome=result.outcome, message=result.message)
+
+
+@public_router.post("/{conn_id}/preview", response_model=SqlPreviewResponse)
+def preview_connection_sql(
+    conn_id: str, body: SqlPreviewRequest, user: CurrentUser = Depends(require_min_role("editor")),
+) -> SqlPreviewResponse:
+    import pandas as pd
+
+    from abkit.db_connections.sql_dataset import SqlExecutionError
+    from abkit.db_connections.sql_guard import SqlValidationError
+
+    try:
+        df = service.preview_connection_sql(user, _parse_id(conn_id), body.sql)
+    except SqlValidationError as e:
+        raise APIError(422, "sql_validation_error", str(e)) from e
+    except SqlExecutionError as e:
+        raise APIError(422, "sql_execution_error", str(e)) from e
+    df = df.where(pd.notnull(df), None)
+    return SqlPreviewResponse(
+        columns=list(df.columns), dtypes={c: str(t) for c, t in df.dtypes.items()},
+        rows=df.to_dict(orient="records"),
+    )

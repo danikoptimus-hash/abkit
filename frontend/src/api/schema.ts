@@ -538,6 +538,141 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/datasets/from-sql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Dataset From Sql
+         * @description DB2 (CLAUDE.md dataset-from-SQL feature): materializes a SELECT query
+         *     against a saved connection to parquet, streamed chunk-by-chunk (not
+         *     materializing the full result in memory) — same async job mechanism as
+         *     design/analyze/validate, with progress ("Fetched N rows...").
+         */
+        post: operations["create_dataset_from_sql_api_v1_datasets_from_sql_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/datasets/{dataset_id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Sql Dataset
+         * @description DB2: re-runs a source='sql' dataset's stored sql_text, overwriting
+         *     its parquet file in place and bumping fetched_at.
+         */
+        post: operations["refresh_sql_dataset_api_v1_datasets__dataset_id__refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/db-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Db Connections */
+        get: operations["list_db_connections_api_v1_admin_db_connections_get"];
+        put?: never;
+        /** Create Db Connection */
+        post: operations["create_db_connection_api_v1_admin_db_connections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/db-connections/{conn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Db Connection */
+        delete: operations["delete_db_connection_api_v1_admin_db_connections__conn_id__delete"];
+        options?: never;
+        head?: never;
+        /** Patch Db Connection */
+        patch: operations["patch_db_connection_api_v1_admin_db_connections__conn_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/admin/db-connections/{conn_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Db Connection */
+        post: operations["test_db_connection_api_v1_admin_db_connections__conn_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/db-connections/test-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Draft Db Connection
+         * @description "Test connection" inline in the "+ Database" modal, before Save —
+         *     tests the form's current values without persisting anything.
+         */
+        post: operations["test_draft_db_connection_api_v1_admin_db_connections_test_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/db-connections/{conn_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Connection Sql */
+        post: operations["preview_connection_sql_api_v1_db_connections__conn_id__preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -829,6 +964,35 @@ export interface components {
             /** New Password */
             new_password: string;
         };
+        /** CreateDatabaseConnectionRequest */
+        CreateDatabaseConnectionRequest: {
+            /** Display Name */
+            display_name: string;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "postgresql" | "clickhouse" | "mssql";
+            /** Host */
+            host: string;
+            /** Port */
+            port: number;
+            /** Database */
+            database: string;
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+            /** Extra Params */
+            extra_params?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Ssl
+             * @default false
+             */
+            ssl: boolean;
+        };
         /** CreateUserRequest */
         CreateUserRequest: {
             /** Email */
@@ -850,6 +1014,58 @@ export interface components {
             user: components["schemas"]["UserAdminOut"];
             /** Generated Password */
             generated_password: string;
+        };
+        /**
+         * DatabaseConnectionOut
+         * @description Never includes the password — write-only field (DB1).
+         */
+        DatabaseConnectionOut: {
+            /** Id */
+            id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "postgresql" | "clickhouse" | "mssql";
+            /** Host */
+            host: string;
+            /** Port */
+            port: number;
+            /** Database */
+            database: string;
+            /** Username */
+            username: string;
+            /** Extra Params */
+            extra_params: {
+                [key: string]: unknown;
+            } | null;
+            /** Ssl */
+            ssl: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** DatasetFromSqlRequest */
+        DatasetFromSqlRequest: {
+            /** Connection Id */
+            connection_id: string;
+            /** Sql */
+            sql: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Experiment Id */
+            experiment_id?: string | null;
         };
         /** DatasetOut */
         DatasetOut: {
@@ -878,6 +1094,19 @@ export interface components {
              * Format: date-time
              */
             uploaded_at: string;
+            /**
+             * Source
+             * @default upload
+             */
+            source: string;
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Connection Name */
+            connection_name?: string | null;
+            /** Sql Text */
+            sql_text?: string | null;
+            /** Fetched At */
+            fetched_at?: string | null;
         };
         /** DatasetPreview */
         DatasetPreview: {
@@ -1236,6 +1465,29 @@ export interface components {
             /** Page Size */
             page_size: number;
         };
+        /** PatchDatabaseConnectionRequest */
+        PatchDatabaseConnectionRequest: {
+            /** Display Name */
+            display_name?: string | null;
+            /** Engine */
+            engine?: ("postgresql" | "clickhouse" | "mssql") | null;
+            /** Host */
+            host?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Database */
+            database?: string | null;
+            /** Username */
+            username?: string | null;
+            /** Password */
+            password?: string | null;
+            /** Extra Params */
+            extra_params?: {
+                [key: string]: unknown;
+            } | null;
+            /** Ssl */
+            ssl?: boolean | null;
+        };
         /** PatchExperimentRequest */
         PatchExperimentRequest: {
             /** Publication Status */
@@ -1282,10 +1534,65 @@ export interface components {
             /** Size Kb */
             size_kb: number;
         };
+        /** SqlPreviewRequest */
+        SqlPreviewRequest: {
+            /** Sql */
+            sql: string;
+        };
+        /** SqlPreviewResponse */
+        SqlPreviewResponse: {
+            /** Columns */
+            columns: string[];
+            /** Dtypes */
+            dtypes: {
+                [key: string]: string;
+            };
+            /** Rows */
+            rows: {
+                [key: string]: unknown;
+            }[];
+        };
         /** StatusChangeRequest */
         StatusChangeRequest: {
             /** To */
             to: string;
+        };
+        /** TestConnectionResult */
+        TestConnectionResult: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "ok" | "host_unreachable" | "auth_failed" | "db_not_found" | "error";
+            /** Message */
+            message: string;
+        };
+        /** TestDraftConnectionRequest */
+        TestDraftConnectionRequest: {
+            /**
+             * Engine
+             * @enum {string}
+             */
+            engine: "postgresql" | "clickhouse" | "mssql";
+            /** Host */
+            host: string;
+            /** Port */
+            port: number;
+            /** Database */
+            database: string;
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+            /** Extra Params */
+            extra_params?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Ssl
+             * @default false
+             */
+            ssl: boolean;
         };
         /** UpdateExperimentPropertiesRequest */
         UpdateExperimentPropertiesRequest: {
@@ -2480,6 +2787,313 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetricBaselineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_dataset_from_sql_api_v1_datasets_from_sql_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetFromSqlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_sql_dataset_api_v1_datasets__dataset_id__refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_db_connections_api_v1_admin_db_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseConnectionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_db_connection_api_v1_admin_db_connections_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDatabaseConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseConnectionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_db_connection_api_v1_admin_db_connections__conn_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conn_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_db_connection_api_v1_admin_db_connections__conn_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conn_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchDatabaseConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseConnectionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_db_connection_api_v1_admin_db_connections__conn_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conn_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestConnectionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_draft_db_connection_api_v1_admin_db_connections_test_draft_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestDraftConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestConnectionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_connection_sql_api_v1_db_connections__conn_id__preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conn_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SqlPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlPreviewResponse"];
                 };
             };
             /** @description Validation Error */

@@ -64,3 +64,13 @@ class TestDraftConnectionRequest(BaseModel):
     password: str
     extra_params: dict[str, Any] | None = None
     ssl: bool = False
+
+
+class SqlPreviewRequest(BaseModel):
+    sql: str
+
+
+class SqlPreviewResponse(BaseModel):
+    columns: list[str]
+    dtypes: dict[str, str]
+    rows: list[dict[str, Any]]
