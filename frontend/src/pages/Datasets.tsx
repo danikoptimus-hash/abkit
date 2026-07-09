@@ -1,12 +1,56 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Table, Drawer, Table as PreviewTable, Typography, Button, Space } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Table, Drawer, Table as PreviewTable, Typography, Button, Space, message } from 'antd'
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
 import { RelativeTime } from '../components/RelativeTime'
 import { SourceTag } from '../components/DatasetSelect'
 import { CreateDatasetModal } from './datasets/CreateDatasetModal'
+import type { components } from '../api/schema'
+
+type DatasetOut = components['schemas']['DatasetOut']
+
+function RefreshButton({ dataset }: { dataset: DatasetOut }) {
+  const queryClient = useQueryClient()
+  const [refreshing, setRefreshing] = useState(false)
+
+  const run = async (e: React.MouseEvent) => {
+    e.stopPropagation() // don't also trigger the row's preview-drawer click
+    setRefreshing(true)
+    try {
+      const { data, error } = await apiClient.POST('/api/v1/datasets/{dataset_id}/refresh', {
+        params: { path: { dataset_id: dataset.id } },
+      })
+      if (error) throw new Error(errorMessage(error))
+      const deadline = Date.now() + 30_000
+      let job = null
+      while (Date.now() < deadline) {
+        const resp = await apiClient.GET('/api/v1/jobs/{job_id}', { params: { path: { job_id: data.job_id } } })
+        job = resp.data
+        if (job && job.status !== 'pending' && job.status !== 'running') break
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      if (job?.status === 'completed') {
+        message.success(`Refreshed: ${(job.result as { n_rows: number } | null)?.n_rows ?? '?'} rows`)
+        queryClient.invalidateQueries({ queryKey: ['datasets'] })
+        queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
+      } else {
+        message.error(job?.error ?? 'Refresh failed')
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Refresh failed')
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  return (
+    <Button size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={run}>
+      Refresh
+    </Button>
+  )
+}
 
 export function DatasetsPage() {
   const [page, setPage] = useState(1)
@@ -37,6 +81,8 @@ export function DatasetsPage() {
     },
   })
 
+  const previewedDataset = data?.items.find((d) => d.id === previewId)
+
   return (
     <div>
       <Space style={{ marginBottom: 16, justifyContent: 'space-between', width: '100%' }}>
@@ -62,6 +108,11 @@ export function DatasetsPage() {
           { title: 'Rows', dataIndex: 'n_rows' },
           { title: 'Uploaded By', dataIndex: 'uploaded_by_email' },
           { title: 'When', dataIndex: 'uploaded_at', render: (ts: string) => <RelativeTime iso={ts} /> },
+          {
+            title: 'Actions',
+            key: 'actions',
+            render: (_, record: DatasetOut) => (record.source === 'sql' ? <RefreshButton dataset={record} /> : null),
+          },
         ]}
       />
 
@@ -73,6 +124,25 @@ export function DatasetsPage() {
         onClose={() => setPreviewId(null)}
         width={720}
       >
+        {previewedDataset?.source === 'sql' && previewedDataset.sql_text && (
+          <div style={{ marginBottom: 16 }}>
+            <Space style={{ marginBottom: 4, justifyContent: 'space-between', width: '100%' }}>
+              <Typography.Text strong>SQL</Typography.Text>
+              {previewedDataset.fetched_at && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Last fetched <RelativeTime iso={previewedDataset.fetched_at} />
+                  {previewedDataset.connection_name ? ` from ${previewedDataset.connection_name}` : ''}
+                </Typography.Text>
+              )}
+            </Space>
+            <Typography.Paragraph
+              code
+              style={{ whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 8, borderRadius: 4 }}
+            >
+              {previewedDataset.sql_text}
+            </Typography.Paragraph>
+          </div>
+        )}
         {preview && (
           <PreviewTable
             loading={previewLoading}

@@ -102,12 +102,18 @@ jobs:
 
       - name: Сгенерировать .env для docker compose
         run: |
+          PG_PASSWORD=$(openssl rand -hex 16)
           cat > .env <<EOF
           ABKIT_SECRET_KEY=$(openssl rand -hex 32)
-          POSTGRES_PASSWORD=$(openssl rand -hex 16)
+          POSTGRES_PASSWORD=$PG_PASSWORD
           ABKIT_ADMIN_EMAIL=admin@e2e.test
           ABKIT_ADMIN_PASSWORD=e2epass123
           EOF
+          # Database Connections feature (DB4, CLAUDE.md): datasets-page.spec.ts
+          # self-references this same postgres (reachable as "postgres" from
+          # INSIDE the backend container, on the compose network) to exercise
+          # the full connect -> preview -> create-dataset-from-SQL flow.
+          echo "E2E_POSTGRES_PASSWORD=$PG_PASSWORD" >> "$GITHUB_ENV"
 
       - name: docker compose up -d --build --wait
         run: docker compose up -d --build --wait
@@ -142,6 +148,14 @@ jobs:
         env:
           E2E_BASE_URL: http://localhost:8080
           E2E_API_BASE: http://localhost:8080/api/v1
+          # Database Connections feature (DB4): host="postgres" — resolvable
+          # from INSIDE the backend container (compose network), not from
+          # this runner; only the backend ever connects to it.
+          E2E_POSTGRES_HOST: postgres
+          E2E_POSTGRES_PORT: "5432"
+          E2E_POSTGRES_USER: abkit
+          E2E_POSTGRES_PASSWORD: ${{ env.E2E_POSTGRES_PASSWORD }}
+          E2E_POSTGRES_DB: abkit
         run: npx playwright test
 
       - name: Логи контейнеров (при падении)

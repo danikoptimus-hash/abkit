@@ -44,6 +44,9 @@ export function AppLayout() {
           { key: 'admin', label: <Link to="/admin">List Users</Link> },
           { key: 'audit', label: <Link to="/audit">Action Log</Link> },
           { type: 'divider' as const },
+          { key: 'data-label', label: 'Data', type: 'group' as const },
+          { key: 'db-connections', label: <Link to="/admin/db-connections">Database Connections</Link> },
+          { type: 'divider' as const },
         ]
       : []),
     { key: 'user-label', label: 'User', type: 'group' as const },

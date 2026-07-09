@@ -83,6 +83,31 @@ def test_execute_select_to_parquet_rejects_non_select(spec, db_url, tmp_path):
     assert not dest.exists()
 
 
+def test_execute_select_to_parquet_stringifies_uuid_columns(spec, db_url, tmp_path):
+    """Regression: psycopg returns a native postgres `uuid` column as
+    Python `uuid.UUID` objects, and pyarrow's pandas conversion silently
+    turned those into raw 16-byte binary garbage instead of a usable
+    string — corrupting e.g. an `id` column end to end."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine(db_url, future=True)
+    with engine.begin() as conn:
+        conn.execute(sa_text("DROP TABLE IF EXISTS sql_dataset_uuid_probe"))
+        conn.execute(sa_text("CREATE TABLE sql_dataset_uuid_probe (id UUID, name TEXT)"))
+        conn.execute(sa_text("INSERT INTO sql_dataset_uuid_probe VALUES (gen_random_uuid(), 'a'), (gen_random_uuid(), 'b')"))
+    engine.dispose()
+
+    dest = tmp_path / "out.parquet"
+    execute_select_to_parquet(spec, "SELECT id, name FROM sql_dataset_uuid_probe ORDER BY name", dest)
+
+    df = pd.read_parquet(dest)
+    assert df["id"].map(type).eq(str).all()
+    for value in df["id"]:
+        import uuid
+
+        uuid.UUID(value)  # round-trips as a valid UUID string, not raw bytes
+
+
 def test_preview_select_returns_first_rows(spec, db_url):
     _seed_rows(db_url, n=250)
     df = preview_select(spec, "SELECT id, name FROM sql_dataset_probe ORDER BY id", limit=10)

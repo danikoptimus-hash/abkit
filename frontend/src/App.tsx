@@ -10,6 +10,7 @@ import { ValidationPage } from './pages/Validation'
 import { AdminPage } from './pages/Admin'
 import { AuditPage } from './pages/Audit'
 import { ProfilePage } from './pages/Profile'
+import { DatabaseConnectionsPage } from './pages/admin/DatabaseConnections'
 
 function App() {
   return (
@@ -49,6 +50,14 @@ function App() {
           element={
             <RequireAuth minRole="admin">
               <AuditPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/db-connections"
+          element={
+            <RequireAuth minRole="admin">
+              <DatabaseConnectionsPage />
             </RequireAuth>
           }
         />

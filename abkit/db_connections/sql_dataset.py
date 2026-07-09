@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid as uuid_mod
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,21 @@ from abkit.db_connections.sql_guard import validate_select_only
 
 _DEFAULT_CHUNK_SIZE = 50_000
 _CONNECT_TIMEOUT_SEC = 15
+
+
+def _stringify_uuid_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """psycopg returns native postgres `uuid` columns as Python
+    `uuid.UUID` objects; `pa.Table.from_pandas` doesn't know that type and
+    silently stores its raw 16 bytes instead of erroring, corrupting the
+    column (e.g. an `id` column becomes unusable/non-UTF8 binary garbage
+    once read back). Convert those columns to plain strings before they
+    ever reach pyarrow."""
+    for col in df.columns:
+        if df[col].dtype == object:
+            sample = df[col].dropna()
+            if not sample.empty and isinstance(sample.iloc[0], uuid_mod.UUID):
+                df[col] = df[col].map(lambda v: str(v) if isinstance(v, uuid_mod.UUID) else v)
+    return df
 
 
 class SqlExecutionError(Exception):
@@ -105,6 +121,7 @@ def execute_select_to_parquet(
                         chunk = chunk.iloc[:remaining]
                         truncated = True
 
+                    chunk = _stringify_uuid_columns(chunk)
                     table = pa.Table.from_pandas(chunk, preserve_index=False)
                     if writer is None:
                         writer = pq.ParquetWriter(str(dest_path), table.schema)
