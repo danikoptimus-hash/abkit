@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Upload, Button, Collapse, Table, Typography, Alert, Space, Spin } from 'antd'
-import { InboxOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import type { UploadProps } from 'antd'
-import { apiClient, errorMessage, toFormData } from '../../api/client'
+import { Button, Collapse, Table, Typography, Alert, Space, Spin } from 'antd'
+import { ThunderboltOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
+import { apiClient, errorMessage } from '../../api/client'
+import { DatasetSelect } from '../../components/DatasetSelect'
 import {
   DESIGN_EXAMPLE_ROWS,
   DESIGN_SQL_EXAMPLE,
@@ -13,8 +14,6 @@ import {
 } from './helpTexts'
 import type { WizardState, GroupFormRow, MetricFormRow, MetricConfig, DesignConfig } from './types'
 import { nextId } from './types'
-
-const { Dragger } = Upload
 
 interface Props {
   state: WizardState
@@ -37,8 +36,21 @@ function metricsFromApi(metrics: MetricConfig[]): MetricFormRow[] {
   }))
 }
 
+// Preview rows carry only JSON-primitive values — dtypes aren't persisted
+// for existing datasets (only computed once, at upload time), so we infer a
+// light "numeric vs. not" split from the preview's JS value types, same
+// trick already used for demo data below. Good enough for step 2/3's
+// numeric-column selects (pre_col/num/den).
+function inferDtypes(previewRows: Record<string, unknown>[]): Record<string, string> {
+  const dtypes: Record<string, string> = {}
+  for (const [key, value] of Object.entries(previewRows[0] ?? {})) {
+    dtypes[key] = typeof value === 'number' ? 'float64' : 'object'
+  }
+  return dtypes
+}
+
 export function Step1Data({ state, setState }: Props) {
-  const [uploading, setUploading] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const applyDatasetResult = (
@@ -58,57 +70,39 @@ export function Step1Data({ state, setState }: Props) {
     return data?.rows ?? []
   }
 
-  const uploadProps: UploadProps = {
-    accept: '.csv',
-    multiple: false,
-    showUploadList: false,
-    customRequest: async (options) => {
-      const file = options.file as File
-      setUploading(true)
-      setError(null)
-      try {
-        const { data, error } = await apiClient.POST('/api/v1/datasets', {
-          body: toFormData({ kind: 'pre_design', file }) as unknown as { kind: string; file: string },
-        })
-        if (error) throw new Error(errorMessage(error))
-        const previewRows = await fetchPreview(data.id)
-        applyDatasetResult(data.id, data.columns, data.dtypes ?? {}, data.n_rows, previewRows)
-        options.onSuccess?.(data)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to upload file')
-        options.onError?.(e as Error)
-      } finally {
-        setUploading(false)
-      }
-    },
+  const handleSelectDataset = async (datasetId: string) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { data, error } = await apiClient.GET('/api/v1/datasets', { params: { query: { page_size: 200 } } })
+      if (error) throw new Error(errorMessage(error))
+      const chosen = data.items.find((d) => d.id === datasetId)
+      if (!chosen) throw new Error('Dataset not found')
+      const previewRows = await fetchPreview(datasetId)
+      applyDatasetResult(datasetId, chosen.columns, inferDtypes(previewRows), chosen.n_rows, previewRows)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load dataset')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleDemoData = async () => {
-    setUploading(true)
+    setLoading(true)
     setError(null)
     try {
       const { data, error } = await apiClient.POST('/api/v1/datasets/demo-design')
       if (error) throw new Error(errorMessage(error))
-      const previewResp = await apiClient.GET('/api/v1/datasets/{dataset_id}/preview', {
-        params: { path: { dataset_id: data.dataset_id }, query: { rows: 20 } },
-      })
-      const previewRows = previewResp.data?.rows ?? []
+      const previewRows = await fetchPreview(data.dataset_id)
       // suggested_config приходит как dict[str, Any] (Record<string, unknown>
       // в сгенерированных типах) — форма гарантированно DesignConfig, кастуем.
       const config = data.suggested_config as unknown as DesignConfig
-      // demo-design не отдает dtypes напрямую (только suggested_config) —
-      // выводим численность колонок из JS-типов значений превью (для
-      // Select числовых колонок в шаге 2/3: pre_col/num/den).
-      const inferredDtypes: Record<string, string> = {}
-      for (const [key, value] of Object.entries(previewRows[0] ?? {})) {
-        inferredDtypes[key] = typeof value === 'number' ? 'float64' : 'object'
-      }
 
       setState((prev) => ({
         ...prev,
         datasetId: data.dataset_id,
         columns: Object.keys(previewRows[0] ?? {}),
-        dtypes: inferredDtypes,
+        dtypes: inferDtypes(previewRows),
         nRows: 5000,
         previewRows,
         name: config.name,
@@ -123,13 +117,13 @@ export function Step1Data({ state, setState }: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to generate demo data')
     } finally {
-      setUploading(false)
+      setLoading(false)
     }
   }
 
   return (
     <div>
-      <Typography.Title level={5}>Upload data about your candidate users</Typography.Title>
+      <Typography.Title level={5}>Select data about your candidate users</Typography.Title>
 
       <Collapse
         ghost
@@ -180,18 +174,23 @@ export function Step1Data({ state, setState }: Props) {
       {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />}
 
       <Space align="start" size={16} style={{ width: '100%' }}>
-        <Dragger {...uploadProps} style={{ width: 480 }} disabled={uploading}>
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined />
-          </p>
-          <p>Drag a CSV here or click to choose a file</p>
-        </Dragger>
-        <Button icon={<ThunderboltOutlined />} onClick={handleDemoData} loading={uploading}>
+        <DatasetSelect
+          value={state.datasetId ?? undefined}
+          onChange={handleSelectDataset}
+          disabled={loading}
+          style={{ width: 420 }}
+          ariaLabel="design-dataset-select"
+        />
+        <Button icon={<ThunderboltOutlined />} onClick={handleDemoData} loading={loading}>
           Demo Data
         </Button>
       </Space>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+        Don't see your data? <Link to="/datasets" target="_blank">Create a new dataset on the Datasets page</Link> (upload a
+        file or pull it from a database connection), then come back and select it here.
+      </Typography.Paragraph>
 
-      {uploading && (
+      {loading && (
         <div style={{ marginTop: 16 }}>
           <Spin /> Processing data...
         </div>

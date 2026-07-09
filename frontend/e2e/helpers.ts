@@ -87,3 +87,30 @@ export async function seedExperiment(
   }
   throw new Error('design job did not finish in time')
 }
+
+/** DB3 (dataset-centric model): design/analyze/validation no longer accept
+ * a direct file upload — data must already exist as a dataset, picked via
+ * DatasetSelect. Uploads it through the real API (same endpoint the
+ * Datasets page's "+ Dataset" modal uses) so e2e specs can create a dataset
+ * to select in the UI, without re-testing the upload mechanics themselves. */
+export async function uploadDataset(
+  request: APIRequestContext,
+  csvText: string,
+  filename: string,
+  opts: { email?: string; password?: string } = {},
+): Promise<{ id: string; filename: string }> {
+  const email = opts.email ?? 'admin@e2e.test'
+  const password = opts.password ?? 'e2epass123'
+
+  const loginResp = await request.post(`${API_BASE}/auth/login`, { data: { email, password } })
+  if (!loginResp.ok()) throw new Error(`login failed: ${loginResp.status()}`)
+
+  const uploadResp = await request.post(`${API_BASE}/datasets`, {
+    multipart: {
+      file: { name: filename, mimeType: 'text/csv', buffer: Buffer.from(csvText) },
+    },
+  })
+  if (!uploadResp.ok()) throw new Error(`upload failed: ${uploadResp.status()}`)
+  const dataset = await uploadResp.json()
+  return { id: dataset.id, filename: dataset.filename }
+}

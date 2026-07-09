@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Typography, Select, Upload, Button, InputNumber, Checkbox, Alert, Progress, Table, Tag, Collapse, Tooltip } from 'antd'
-import { InboxOutlined, CheckCircleOutlined } from '@ant-design/icons'
-import type { UploadProps } from 'antd'
-import { apiClient, errorMessage, toFormData } from '../api/client'
+import { Typography, Select, Button, InputNumber, Checkbox, Alert, Progress, Table, Tag, Collapse, Tooltip } from 'antd'
+import { CheckCircleOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
+import { apiClient, errorMessage } from '../api/client'
 import { useJobPolling } from '../api/useJobPolling'
+import { DatasetSelect } from '../components/DatasetSelect'
 import { RelativeTime } from '../components/RelativeTime'
-
-const { Dragger } = Upload
 
 interface MethodFPR {
   method: string
@@ -172,44 +171,34 @@ export function ValidationPage() {
         }
       : null
 
-  const uploadProps: UploadProps = {
-    accept: '.csv',
-    multiple: false,
-    showUploadList: false,
-    disabled: uploading,
-    customRequest: async (options) => {
-      const file = options.file as File
-      setUploading(true)
-      setUploadError(null)
-      try {
-        const { data, error } = await apiClient.POST('/api/v1/datasets', {
-          body: toFormData({ kind: 'validation', experiment_name: experimentName, file }) as unknown as {
-            kind: string
-            file: string
-          },
-        })
-        if (error) throw new Error(errorMessage(error))
+  const handleSelectDataset = async (datasetId: string) => {
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const { data, error } = await apiClient.GET('/api/v1/datasets', { params: { query: { page_size: 200 } } })
+      if (error) throw new Error(errorMessage(error))
+      const chosen = data.items.find((d) => d.id === datasetId)
+      if (!chosen) throw new Error('Dataset not found')
 
-        if (experimentDetail) {
-          const missing = requiredColumns(experimentDetail.config).filter((c) => !data.columns.includes(c))
-          if (missing.length > 0) {
-            setUploadError(
-              `This file is missing columns required by the experiment's design: ${missing.join(', ')}`,
-            )
-            options.onError?.(new Error('missing columns'))
-            return
-          }
+      if (experimentDetail) {
+        const missing = requiredColumns(experimentDetail.config).filter((c) => !chosen.columns.includes(c))
+        if (missing.length > 0) {
+          setUploadError(
+            `This dataset is missing columns required by the experiment's design: ${missing.join(', ')}`,
+          )
+          return
         }
-
-        setManualDataset({ id: data.id, filename: data.filename, nRows: data.n_rows, columns: data.columns, uploadedAt: data.uploaded_at })
-        options.onSuccess?.(data)
-      } catch (e) {
-        setUploadError(e instanceof Error ? e.message : 'Failed to upload file')
-        options.onError?.(e as Error)
-      } finally {
-        setUploading(false)
       }
-    },
+
+      setManualDataset({
+        id: chosen.id, filename: chosen.filename, nRows: chosen.n_rows, columns: chosen.columns,
+        uploadedAt: chosen.uploaded_at,
+      })
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Failed to load dataset')
+    } finally {
+      setUploading(false)
+    }
   }
 
   const runValidate = async () => {
@@ -229,7 +218,7 @@ export function ValidationPage() {
   const disabledReason = !experimentName
     ? 'Select an experiment first'
     : !activeDataset
-      ? 'Upload post-period data or use the experiment design data'
+      ? 'Select post-period data or use the experiment design data'
       : ''
   const canSubmit = !!activeDataset && phase !== 'running'
 
@@ -325,12 +314,17 @@ export function ValidationPage() {
                   style={{ marginBottom: 12 }}
                 />
               )}
-              <Dragger {...uploadProps} style={{ marginBottom: 12 }}>
-                <p className="ant-upload-drag-icon">
-                  <InboxOutlined />
-                </p>
-                <p>Simulation data (CSV)</p>
-              </Dragger>
+              <DatasetSelect
+                value={manualDataset?.id}
+                onChange={handleSelectDataset}
+                disabled={uploading}
+                placeholder="Select simulation data"
+                ariaLabel="validation-dataset-select"
+                style={{ marginBottom: 4 }}
+              />
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 12 }}>
+                Don't see your data? <Link to="/datasets" target="_blank">Create a new dataset on the Datasets page</Link>.
+              </Typography.Paragraph>
               {manualDataset && (
                 <Alert
                   type="success"

@@ -86,7 +86,7 @@ def db_url(postgres_url):
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE audit_log, analysis_results, datasets, "
+                "TRUNCATE TABLE audit_log, analysis_results, experiment_datasets, datasets, "
                 "assignments, experiment_blocks, jobs, database_connections, experiments, users "
                 "RESTART IDENTITY CASCADE"
             )

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { loginViaUi, seedExperiment } from './helpers'
+import { loginViaUi, seedExperiment, uploadDataset } from './helpers'
 
 // Regression for the compare-methods crash bug: a failed analyze job must
 // show its real, human-readable error (job.error) instead of the generic
@@ -14,19 +14,24 @@ test('a failed analyze job shows its real error message, not a generic one', asy
 }) => {
   const name = `analyze_fail_e2e_${Date.now()}`
   await seedExperiment(request, name)
-  await loginViaUi(page)
 
+  // Every row uses the same user_id -> check_no_duplicates raises
+  // AnalysisError before any join happens. Uploaded via the API BEFORE
+  // navigating: DatasetSelect's query is fetched once on mount and isn't
+  // invalidated by an out-of-band API call happening after the page loads.
+  const csv = 'user_id,revenue\n' + Array.from({ length: 50 }, () => `dup_user,${100}`).join('\n')
+  const dupesFilename = `dupes_${Date.now()}.csv`
+  await uploadDataset(request, csv, dupesFilename)
+
+  await loginViaUi(page)
   await page.goto(`/experiments/${name}`)
   await page.getByRole('tab', { name: 'Analysis' }).click()
 
-  // Every row uses the same user_id -> check_no_duplicates raises
-  // AnalysisError before any join happens.
-  const csv = 'user_id,revenue\n' + Array.from({ length: 50 }, () => `dup_user,${100}`).join('\n')
-  const fileChooserPromise = page.waitForEvent('filechooser')
-  await page.getByText('Upload post-period data (CSV)').click()
-  const fileChooser = await fileChooserPromise
-  await fileChooser.setFiles({ name: 'dupes.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
-  await expect(page.getByText(/Data ready: dupes\.csv/)).toBeVisible()
+  const datasetSelect = page.getByRole('combobox', { name: 'post-period-dataset-select' })
+  await datasetSelect.click()
+  await datasetSelect.fill(dupesFilename)
+  await page.getByTitle(dupesFilename).click()
+  await expect(page.getByText(new RegExp(`Data ready: ${dupesFilename.replace('.', '\\.')}`))).toBeVisible()
 
   await page.getByRole('button', { name: 'Run analysis' }).click()
   await expect(page.getByText(/duplicate 'user_id' values/)).toBeVisible({ timeout: 20_000 })

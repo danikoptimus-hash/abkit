@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { loginViaUi, seedExperiment } from './helpers'
+import { loginViaUi, seedExperiment, uploadDataset } from './helpers'
 
 // UX package, Validation п.C: the pre-design dataset is auto-selected so
 // Run Validation is ready immediately, no forced manual upload.
@@ -24,6 +24,14 @@ test('"Use different data" reveals upload, and an incompatible file is rejected 
 }) => {
   const name = `val_incompat_e2e_${Date.now()}`
   await seedExperiment(request, name)
+
+  // Uploaded via the API up front, before any page load: DatasetSelect's
+  // query is cached per mount and isn't invalidated by an out-of-band API
+  // call made later in the browser context's lifetime.
+  const csv = 'some_other_column\n' + Array.from({ length: 50 }, (_, i) => `${i}`).join('\n')
+  const incompatibleFilename = `incompatible_${Date.now()}.csv`
+  await uploadDataset(request, csv, incompatibleFilename)
+
   await loginViaUi(page)
 
   await page.goto('/validation')
@@ -34,11 +42,10 @@ test('"Use different data" reveals upload, and an incompatible file is rejected 
 
   await page.getByRole('button', { name: 'Use different data' }).click()
 
-  const csv = 'some_other_column\n' + Array.from({ length: 50 }, (_, i) => `${i}`).join('\n')
-  const fileChooserPromise = page.waitForEvent('filechooser')
-  await page.getByText('Simulation data (CSV)').click()
-  const fileChooser = await fileChooserPromise
-  await fileChooser.setFiles({ name: 'incompatible.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
+  const datasetSelect = page.getByRole('combobox', { name: 'validation-dataset-select' })
+  await datasetSelect.click()
+  await datasetSelect.fill(incompatibleFilename)
+  await page.getByTitle(incompatibleFilename).click()
 
   await expect(page.getByText(/missing columns required by the experiment's design/)).toBeVisible()
   await expect(page.getByRole('button', { name: 'Run Validation' })).toBeDisabled()

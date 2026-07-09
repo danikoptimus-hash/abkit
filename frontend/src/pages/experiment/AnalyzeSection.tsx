@@ -1,14 +1,13 @@
 import { useState } from 'react'
-import { Upload, Button, Select, Checkbox, Typography, Alert, Progress, Tooltip } from 'antd'
-import { InboxOutlined, ThunderboltOutlined, ReloadOutlined, CheckCircleOutlined } from '@ant-design/icons'
+import { Button, Select, Checkbox, Typography, Alert, Progress, Tooltip } from 'antd'
+import { ThunderboltOutlined, ReloadOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { UploadProps } from 'antd'
-import { apiClient, errorMessage, toFormData } from '../../api/client'
+import { Link } from 'react-router-dom'
+import { apiClient, errorMessage } from '../../api/client'
 import { useJobPolling } from '../../api/useJobPolling'
+import { DatasetSelect } from '../../components/DatasetSelect'
 import { AnalyzeResults } from './AnalyzeResults'
 import { experimentResultsQueryKey, fetchExperimentResults } from './resultsQuery'
-
-const { Dragger } = Upload
 
 const CORRECTION_OPTIONS = [
   { value: 'holm', label: 'holm' },
@@ -28,7 +27,7 @@ interface PreparedDataset {
 export function AnalyzeSection({ experimentName, hasAssignments }: { experimentName: string; hasAssignments: boolean }) {
   const queryClient = useQueryClient()
   const [prepared, setPrepared] = useState<PreparedDataset | null>(null)
-  const [uploading, setUploading] = useState(false)
+  const [selecting, setSelecting] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   const [correction, setCorrection] = useState('holm')
@@ -59,36 +58,24 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
     setPanelOverride(true)
   }
 
-  const uploadProps: UploadProps = {
-    accept: '.csv',
-    multiple: false,
-    showUploadList: false,
-    disabled: uploading || running,
-    customRequest: async (options) => {
-      const file = options.file as File
-      setUploading(true)
-      setUploadError(null)
-      try {
-        const { data, error } = await apiClient.POST('/api/v1/datasets', {
-          body: toFormData({ kind: 'post_analysis', experiment_name: experimentName, file }) as unknown as {
-            kind: string
-            file: string
-          },
-        })
-        if (error) throw new Error(errorMessage(error))
-        setPrepared({ id: data.id, filename: data.filename, nRows: data.n_rows, columns: data.columns, isDemo: false })
-        options.onSuccess?.(data)
-      } catch (e) {
-        setUploadError(e instanceof Error ? e.message : 'Failed to upload file')
-        options.onError?.(e as Error)
-      } finally {
-        setUploading(false)
-      }
-    },
+  const handleSelectDataset = async (datasetId: string) => {
+    setSelecting(true)
+    setUploadError(null)
+    try {
+      const { data, error } = await apiClient.GET('/api/v1/datasets', { params: { query: { page_size: 200 } } })
+      if (error) throw new Error(errorMessage(error))
+      const chosen = data.items.find((d) => d.id === datasetId)
+      if (!chosen) throw new Error('Dataset not found')
+      setPrepared({ id: chosen.id, filename: chosen.filename, nRows: chosen.n_rows, columns: chosen.columns, isDemo: false })
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : 'Failed to load dataset')
+    } finally {
+      setSelecting(false)
+    }
   }
 
   const generateDemoData = async () => {
-    setUploading(true)
+    setSelecting(true)
     setUploadError(null)
     try {
       const { data, error } = await apiClient.POST('/api/v1/experiments/{name}/demo-post-data', {
@@ -100,7 +87,7 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : 'Failed to generate demo data')
     } finally {
-      setUploading(false)
+      setSelecting(false)
     }
   }
 
@@ -166,17 +153,21 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
 
           <Typography.Text strong>Data</Typography.Text>
           <div style={{ marginTop: 8, marginBottom: 16 }}>
-            <Dragger {...uploadProps} style={{ marginBottom: 12 }}>
-              <p className="ant-upload-drag-icon">
-                <InboxOutlined />
-              </p>
-              <p>Upload post-period data (CSV)</p>
-            </Dragger>
+            <DatasetSelect
+              value={prepared && !prepared.isDemo ? prepared.id : undefined}
+              onChange={handleSelectDataset}
+              disabled={selecting || running}
+              placeholder="Select post-period dataset"
+              ariaLabel="post-period-dataset-select"
+            />
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 12 }}>
+              Don't see your data? <Link to="/datasets" target="_blank">Create a new dataset on the Datasets page</Link>.
+            </Typography.Paragraph>
             <Tooltip title={hasAssignments ? '' : 'No assignments for this experiment'}>
               <Button
                 icon={<ThunderboltOutlined />}
-                disabled={!hasAssignments || uploading || running}
-                loading={uploading}
+                disabled={!hasAssignments || selecting || running}
+                loading={selecting}
                 onClick={generateDemoData}
                 block
               >
@@ -199,7 +190,7 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
             )}
           </div>
 
-          <Tooltip title={prepared ? '' : 'Upload post-period data or generate demo data first'}>
+          <Tooltip title={prepared ? '' : 'Select a dataset or generate demo data first'}>
             <Button
               type="primary"
               onClick={runAnalyze}

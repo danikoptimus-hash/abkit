@@ -929,7 +929,10 @@ export interface components {
         };
         /** Body_upload_dataset_api_v1_datasets_post */
         Body_upload_dataset_api_v1_datasets_post: {
-            /** Kind */
+            /**
+             * Kind
+             * @default pre_design
+             */
             kind: string;
             /** Experiment Name */
             experiment_name?: string | null;
@@ -1062,7 +1065,10 @@ export interface components {
             sql: string;
             /** Name */
             name: string;
-            /** Kind */
+            /**
+             * Kind
+             * @default pre_design
+             */
             kind: string;
             /** Experiment Id */
             experiment_id?: string | null;

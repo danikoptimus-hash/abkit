@@ -28,7 +28,9 @@ class DatasetFromSqlRequest(BaseModel):
     connection_id: str
     sql: str
     name: str
-    kind: str
+    # DB3 (dataset-centric model): no longer required at creation — see
+    # upload_dataset's kind param in backend/routers/datasets.py.
+    kind: str = "pre_design"
     experiment_id: str | None = None
 
 

@@ -554,13 +554,14 @@ def start_analyze(
     user: CurrentUser = Depends(require_min_role("editor")),
     runner: JobRunner = Depends(get_job_runner),
 ) -> JobAccepted:
-    _visible_or_404(_get_experiment_or_404(name), user)
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
     from abkit.experiment import Experiment
 
     unit_col = Experiment.load(name).config.unit_col
     data = _load_dataset_df(body.dataset_id, unit_col=unit_col)
 
     def _run(reporter) -> dict[str, Any]:
+        from abkit.db.repositories import ExperimentDatasetRepo
         from abkit.experiment import Experiment
         from abkit.jobs import run_analyze
 
@@ -574,6 +575,10 @@ def start_analyze(
             name, results,
             dataset_id=uuid_mod.UUID(body.dataset_id), created_by=uuid_mod.UUID(user.id),
         )
+        # DB3 (dataset-centric model): record this dataset as used for
+        # analysis by this experiment — a dataset may be reused across
+        # experiments/kinds, so this is a link, not a single-owner field.
+        ExperimentDatasetRepo().link(exp.id, uuid_mod.UUID(body.dataset_id), kind="post_analysis")
         return {"experiment_name": name}
 
     job = runner.submit("analyze", uuid_mod.UUID(user.id), _run)
@@ -608,13 +613,16 @@ def create_demo_post_data(
     dataset_id = DatasetRepo().create(
         kind="post_analysis", filename="demo_post_data.csv", n_rows=len(data), columns=list(data.columns),
         storage_path=str(dest_path), sha256=DatasetRepo.compute_sha256(data),
-        experiment_id=exp.id, uploaded_by=uuid_mod.UUID(user.id),
+        experiment_id=exp.id, uploaded_by=uuid_mod.UUID(user.id), source="demo",
     )
+    from abkit.db.repositories import ExperimentDatasetRepo
+
+    ExperimentDatasetRepo().link(exp.id, dataset_id, kind="post_analysis")
     ds = DatasetRepo().get_by_id(dataset_id)
     return DatasetOut(
         id=str(ds.id), experiment_id=str(exp.id), experiment_name=name,
         kind=ds.kind, filename=ds.filename, n_rows=ds.n_rows, columns=ds.columns,
-        uploaded_by_email=user.email, uploaded_at=ds.uploaded_at,
+        uploaded_by_email=user.email, uploaded_at=ds.uploaded_at, source=ds.source,
     )
 
 
@@ -628,12 +636,13 @@ def start_validate(
 
     from abkit.experiment import Experiment
 
-    _visible_or_404(_get_experiment_or_404(name), user)
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
     unit_col = Experiment.load(name).config.unit_col
     data = _load_dataset_df(body.dataset_id, unit_col=unit_col)
     used_dataset = DatasetRepo().get_by_id(uuid_mod.UUID(body.dataset_id))
 
     def _run(reporter) -> dict[str, Any]:
+        from abkit.db.repositories import ExperimentDatasetRepo
         from abkit.experiment import Experiment
         from abkit.jobs import run_validate_aa, run_validate_ab
 
@@ -655,6 +664,7 @@ def start_validate(
             compare_methods=body.compare_methods, progress_callback=reporter.counts,
             show_progress=False, dataset_id=body.dataset_id,
         )
+        ExperimentDatasetRepo().link(exp.id, uuid_mod.UUID(body.dataset_id), kind="validation")
         return {
             "aa": {"methods": [dataclasses.asdict(m) for m in aa_report.methods]},
             "ab": {"methods": [dataclasses.asdict(m) for m in ab_report.methods]},

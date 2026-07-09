@@ -75,15 +75,19 @@ def start_design(
     data = read_dataset_file(dataset.storage_path, dtype={config.unit_col: str})
 
     def _run(reporter: ProgressReporter) -> dict[str, Any]:
+        from abkit.db.repositories import ExperimentDatasetRepo, ExperimentRepo
         from abkit.jobs import run_design
 
         _check_isolation_overlap(config, data, confirmed)
         experiment = run_design(user, config, data, progress_callback=reporter.stage)
+        exp_row = ExperimentRepo().get_by_name(experiment.name)
         if dataset.experiment_id is None:
-            from abkit.db.repositories import ExperimentRepo
-
-            exp_row = ExperimentRepo().get_by_name(experiment.name)
             DatasetRepo().attach_to_experiment(dataset.id, exp_row.id)
+        # DB3 (dataset-centric model): every experiment<->dataset use is
+        # recorded here, not just the first/primary one attach_to_experiment
+        # sets above — a dataset selected for design in more than one
+        # experiment still needs a link row for each.
+        ExperimentDatasetRepo().link(exp_row.id, dataset.id, kind="pre_design")
         return {"experiment_name": experiment.name}
 
     job = runner.submit("design", uuid_mod.UUID(user.id), _run)

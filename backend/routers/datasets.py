@@ -99,7 +99,13 @@ def _stream_upload_to_disk(upload: UploadFile, dest: Path) -> None:
 
 @router.post("", response_model=DatasetOut, status_code=201)
 def upload_dataset(
-    kind: str = Form(...),
+    # DB3 (dataset-centric model, CLAUDE.md): kind is no longer required at
+    # creation time — it's recorded per-use in experiment_datasets when the
+    # dataset is actually selected for design/analyze/validate. This column
+    # is kept only as a legacy/first-use label (default 'pre_design', the
+    # most common starting point — most standalone uploads are candidate
+    # data for a design).
+    kind: str = Form(default="pre_design"),
     experiment_name: str | None = Form(default=None),
     file: UploadFile = File(...),
     user: CurrentUser = Depends(require_min_role("editor")),

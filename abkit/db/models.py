@@ -178,6 +178,43 @@ class Dataset(Base):
     fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ExperimentDataset(Base):
+    """Many-to-many use record (DB3, dataset-centric model, CLAUDE.md): a
+    dataset can be selected by more than one experiment, and the same
+    experiment can use different datasets for design/analyze/validate.
+    Dataset.experiment_id/kind (single link) remain as the PRIMARY/first
+    association for backward-compatible reads — this table is the
+    authoritative record of every use, populated by abkit/jobs.py whenever
+    a dataset is actually used (not merely selected in the UI)."""
+
+    __tablename__ = "experiment_datasets"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('pre_design','post_analysis','validation')", name="ck_experiment_datasets_kind"
+        ),
+        Index("ix_experiment_datasets_experiment", "experiment_id"),
+        Index("ix_experiment_datasets_dataset", "dataset_id"),
+        Index(
+            "ux_experiment_datasets_experiment_dataset_kind",
+            "experiment_id", "dataset_id", "kind", unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("experiments.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
 

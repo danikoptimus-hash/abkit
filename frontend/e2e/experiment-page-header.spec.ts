@@ -54,11 +54,11 @@ test('tabs switch and persist in the URL across a reload', async ({ page, reques
 
   await page.getByRole('tab', { name: 'Analysis' }).click()
   await expect(page).toHaveURL(/\?tab=analysis/)
-  await expect(page.getByText('Upload post-period data (CSV)')).toBeVisible()
+  await expect(page.getByText('Analysis options')).toBeVisible()
 
   await page.reload()
   await expect(page.getByRole('tab', { name: 'Analysis', selected: true })).toBeVisible()
-  await expect(page.getByText('Upload post-period data (CSV)')).toBeVisible()
+  await expect(page.getByText('Analysis options')).toBeVisible()
 })
 
 test('Edit button top-right opens edit mode', async ({ page, request }) => {

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { loginViaUi, seedExperiment } from './helpers'
+import { loginViaUi, seedExperiment, uploadDataset } from './helpers'
 
 // FRONTEND.md §7 R6: "Playwright: демо пост-данные -> анализ -> вердикты и
 // forest plot видны -> экспорт таблицы."
@@ -62,7 +62,7 @@ test('Run analysis is disabled with a tooltip until data is prepared', async ({ 
   const runButton = page.getByRole('button', { name: 'Run analysis' })
   await expect(runButton).toBeDisabled()
   await runButton.hover({ force: true })
-  await expect(page.getByText('Upload post-period data or generate demo data first')).toBeVisible()
+  await expect(page.getByText('Select a dataset or generate demo data first')).toBeVisible()
 
   await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
   await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
@@ -79,7 +79,7 @@ test('Analysis tab layout: options above the dropzone, run button below data', a
 
   const optionsBox = await page.getByText('Analysis options', { exact: true }).boundingBox()
   const dataBox = await page.getByText('Data', { exact: true }).boundingBox()
-  const dropzoneBox = await page.getByText('Upload post-period data (CSV)').boundingBox()
+  const dropzoneBox = await page.getByRole('combobox', { name: 'post-period-dataset-select' }).boundingBox()
   const runButtonBox = await page.getByRole('button', { name: 'Run analysis' }).boundingBox()
 
   expect(optionsBox).not.toBeNull()
@@ -99,6 +99,15 @@ test('re-run analysis with a new dataset updates the results and run count', asy
   test.setTimeout(60_000)
   const name = `analyze_rerun_e2e_${Date.now()}`
   await seedExperiment(request, name)
+
+  // Uploaded via the API up front, before any page load: DatasetSelect's
+  // query is cached per mount and isn't invalidated by an out-of-band API
+  // call made later in the browser context's lifetime.
+  const csv =
+    'user_id,revenue\n' + Array.from({ length: 200 }, (_, i) => `u_${name}_${i},${100 + (i % 10)}.5`).join('\n')
+  const rerunFilename = `rerun_${Date.now()}.csv`
+  await uploadDataset(request, csv, rerunFilename)
+
   await loginViaUi(page)
 
   await page.goto(`/experiments/${name}`)
@@ -117,13 +126,11 @@ test('re-run analysis with a new dataset updates the results and run count', asy
   await page.getByRole('button', { name: 'Re-run analysis' }).click()
   await expect(page.getByRole('button', { name: 'Run analysis' })).toBeDisabled()
 
-  const csv =
-    'user_id,revenue\n' + Array.from({ length: 200 }, (_, i) => `u_${name}_${i},${100 + (i % 10)}.5`).join('\n')
-  const fileChooserPromise = page.waitForEvent('filechooser')
-  await page.getByText('Upload post-period data (CSV)').click()
-  const fileChooser = await fileChooserPromise
-  await fileChooser.setFiles({ name: 'rerun.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
-  await expect(page.getByText(/Data ready: rerun\.csv/)).toBeVisible()
+  const datasetSelect = page.getByRole('combobox', { name: 'post-period-dataset-select' })
+  await datasetSelect.click()
+  await datasetSelect.fill(rerunFilename)
+  await page.getByTitle(rerunFilename).click()
+  await expect(page.getByText(new RegExp(`Data ready: ${rerunFilename.replace('.', '\\.')}`))).toBeVisible()
 
   await page.getByRole('button', { name: 'Run analysis' }).click()
   await expect(
@@ -131,5 +138,5 @@ test('re-run analysis with a new dataset updates the results and run count', asy
   ).toBeVisible({ timeout: 20_000 })
 
   await page.getByRole('tab', { name: 'Results' }).click()
-  await expect(page.getByText(/rerun\.csv \(run #2\)/)).toBeVisible()
+  await expect(page.getByText(new RegExp(`${rerunFilename.replace('.', '\\.')} \\(run #2\\)`))).toBeVisible()
 })

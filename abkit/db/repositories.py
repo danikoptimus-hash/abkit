@@ -25,6 +25,7 @@ from abkit.db.models import (
     Experiment,
     ExperimentAccess,
     ExperimentBlock,
+    ExperimentDataset,
     Job,
     User,
 )
@@ -514,6 +515,37 @@ class DatasetRepo:
                 )
                 or 0
             )
+
+
+class ExperimentDatasetRepo:
+    """Many-to-many use record (DB3, dataset-centric model) — see
+    abkit.db.models.ExperimentDataset. link() is idempotent: re-selecting
+    the same dataset for the same experiment+kind is a no-op, not a new row."""
+
+    def link(self, experiment_id: uuid_mod.UUID, dataset_id: uuid_mod.UUID, kind: str) -> None:
+        with session_scope() as s:
+            exists = s.scalar(
+                select(ExperimentDataset.id).where(
+                    ExperimentDataset.experiment_id == experiment_id,
+                    ExperimentDataset.dataset_id == dataset_id,
+                    ExperimentDataset.kind == kind,
+                )
+            )
+            if exists is None:
+                s.add(ExperimentDataset(experiment_id=experiment_id, dataset_id=dataset_id, kind=kind))
+
+    def list_for_experiment(self, experiment_id: uuid_mod.UUID) -> list[ExperimentDataset]:
+        with session_scope() as s:
+            rows = list(
+                s.scalars(
+                    select(ExperimentDataset)
+                    .where(ExperimentDataset.experiment_id == experiment_id)
+                    .order_by(ExperimentDataset.created_at.desc())
+                )
+            )
+            for r in rows:
+                s.expunge(r)
+            return rows
 
 
 class ResultRepo:
