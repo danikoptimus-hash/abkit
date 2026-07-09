@@ -1,5 +1,5 @@
-import { Table, Button, Tag } from 'antd'
-import { DownloadOutlined } from '@ant-design/icons'
+import { Table, Button, Tag, Tooltip, Space } from 'antd'
+import { DownloadOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import type { TestResultOut } from './analyzeTypes'
 import { verdict } from './analyzeTypes'
 
@@ -56,14 +56,14 @@ function toRows(results: TestResultOut[], controlName: string, correction: strin
 
 function toCsv(rows: Row[]): string {
   const headers = [
-    'Metric', 'Comparison group', 'Method', 'Designed', 'Effect (abs)', 'Effect (rel, %)',
-    '95% CI (rel., %)', 'p-value', 'p-adj', 'Correction', 'n (control)', 'n (test)',
+    'Metric', 'Comparison group', 'Method', 'Effect (abs.)', 'Lift %',
+    '95% CI of lift', 'p-value', 'p-value (adj.)', 'Correction', 'n (control)', 'n (test)',
     'Variance reduction', 'Verdict',
   ]
   const lines = [headers.join(',')]
   for (const r of rows) {
     const cells = [
-      r.metric, r.comparison, r.method, r.designed ? '1' : '0',
+      r.metric, r.comparison, r.method,
       String(r.effect_abs), String(r.effect_rel * 100),
       `"[${(r.ci_rel[0] * 100).toFixed(2)}%, ${(r.ci_rel[1] * 100).toFixed(2)}%]"`,
       String(r.p_value), r.p_value_adjusted !== null ? String(r.p_value_adjusted) : '',
@@ -84,6 +84,17 @@ function downloadCsv(csv: string, filename: string) {
   link.download = filename
   link.click()
   URL.revokeObjectURL(url)
+}
+
+function HeaderWithTooltip({ label, tooltip }: { label: string; tooltip: string }) {
+  return (
+    <Space size={4}>
+      {label}
+      <Tooltip title={tooltip}>
+        <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+      </Tooltip>
+    </Space>
+  )
 }
 
 export function DetailedResultsTable({
@@ -111,19 +122,38 @@ export function DetailedResultsTable({
         dataSource={rows}
         pagination={false}
         scroll={{ x: true }}
+        // Designed method is the one the decision is based on — with no
+        // "Designed" column anymore (UX package, 5.1), bolding the row is
+        // the only remaining signal when compare_methods shows several rows
+        // per metric.
+        rowClassName={(record) => (record.designed ? 'detailed-results-designed-row' : '')}
         columns={[
           { title: 'Metric', dataIndex: 'metric' },
           { title: 'Comparison group', dataIndex: 'comparison' },
           { title: 'Method', dataIndex: 'method' },
-          { title: 'Designed', dataIndex: 'designed', render: (v: boolean) => (v ? '✓' : '') },
-          { title: 'Effect (abs)', dataIndex: 'effect_abs', render: (v: number) => v.toFixed(4) },
-          { title: 'Effect (rel, %)', dataIndex: 'effect_rel', render: (v: number) => `${(v * 100).toFixed(2)}%` },
           {
-            title: '95% CI (rel.)', dataIndex: 'ci_rel',
+            title: <HeaderWithTooltip label="Effect (abs.)" tooltip="Absolute difference in metric units (test − control)" />,
+            dataIndex: 'effect_abs', render: (v: number) => v.toFixed(4),
+          },
+          {
+            title: <HeaderWithTooltip label="Lift %" tooltip="Relative effect: (test − control) / control" />,
+            dataIndex: 'effect_rel', render: (v: number) => `${(v * 100).toFixed(2)}%`,
+          },
+          {
+            title: <HeaderWithTooltip label="95% CI of lift" tooltip="Confidence interval of the relative effect (lift), not of the metric itself" />,
+            dataIndex: 'ci_rel',
             render: (v: [number, number]) => `[${(v[0] * 100).toFixed(2)}%, ${(v[1] * 100).toFixed(2)}%]`,
           },
           { title: 'p-value', dataIndex: 'p_value', render: (v: number) => v.toFixed(4) },
-          { title: 'p-adj', dataIndex: 'p_value_adjusted', render: (v: number | null) => (v === null ? '—' : v.toFixed(4)) },
+          {
+            title: (
+              <HeaderWithTooltip
+                label="p-value (adj.)"
+                tooltip="p-value adjusted for multiple comparisons (see Correction). Decision is made on this value. Equals raw p-value when there is only one primary hypothesis"
+              />
+            ),
+            dataIndex: 'p_value_adjusted', render: (v: number | null) => (v === null ? '—' : v.toFixed(4)),
+          },
           { title: 'Correction', dataIndex: 'correction' },
           { title: 'n (control)', dataIndex: 'n_control' },
           { title: 'n (test)', dataIndex: 'n_test' },

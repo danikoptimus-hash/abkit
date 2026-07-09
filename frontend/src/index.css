@@ -16,3 +16,10 @@ body {
 .ant-table-tbody > tr:hover .hover-actions {
   opacity: 1;
 }
+
+/* Detailed results table (UX package, 5.1): the designed method — the one
+   the decision is based on — is bolded instead of a separate "Designed"
+   column, same as the HTML report's .designed-row. */
+.detailed-results-designed-row td {
+  font-weight: 600;
+}

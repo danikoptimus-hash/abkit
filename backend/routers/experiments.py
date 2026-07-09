@@ -127,6 +127,32 @@ def list_experiments(
     return PaginatedExperiments(items=items, total=total, page=page, page_size=page_size)
 
 
+def _get_last_modified(exp) -> tuple:
+    """Самое свежее из audit_log (status/publication/rename/properties/
+    analyze — все аудируются, см. abkit/jobs.py::_audit) и
+    experiment_blocks.updated_at/updated_by (блоки НЕ аудируются отдельно,
+    только эти две колонки трассируют правку). Фильтр по object_name, как
+    и GET /{name}/audit — после переименования старые записи под прежним
+    именем этим запросом не видны (то же существующее ограничение)."""
+    from abkit.db.repositories import AuditRepo, BlockRepo
+
+    candidates: list[tuple] = []
+
+    recent_audit = AuditRepo().list_recent(limit=1, object_name=exp.name)
+    if recent_audit:
+        candidates.append((recent_audit[0].ts, recent_audit[0].user_id))
+
+    blocks = BlockRepo().list_for_experiment(exp.id)
+    edited_blocks = [b for b in blocks if b.updated_by is not None]
+    if edited_blocks:
+        latest_block = max(edited_blocks, key=lambda b: b.updated_at)
+        candidates.append((latest_block.updated_at, latest_block.updated_by))
+
+    if not candidates:
+        return (None, None)
+    return max(candidates, key=lambda c: c[0])
+
+
 @router.get("/{name}", response_model=ExperimentDetail)
 def get_experiment(name: str, user: CurrentUser = Depends(get_current_user)) -> ExperimentDetail:
     from abkit.access import is_owner_or_granted
@@ -144,6 +170,8 @@ def get_experiment(name: str, user: CurrentUser = Depends(get_current_user)) -> 
         if path.exists()
         else []
     )
+    last_modified_at, last_modified_by_id = _get_last_modified(exp)
+    last_modified_user = UserRepo().get_by_id(last_modified_by_id) if last_modified_by_id else None
     return ExperimentDetail(
         name=exp.name, status=exp.status, publication_status=exp.publication_status,
         owner_id=str(exp.owner_id) if exp.owner_id else None,
@@ -151,6 +179,10 @@ def get_experiment(name: str, user: CurrentUser = Depends(get_current_user)) -> 
         owner_first_name=owner.first_name if owner else None,
         owner_last_name=owner.last_name if owner else None,
         can_edit=user.role in ("editor", "admin") and is_owner_or_granted(user, exp),
+        last_modified_at=last_modified_at,
+        last_modified_by_first_name=last_modified_user.first_name if last_modified_user else None,
+        last_modified_by_last_name=last_modified_user.last_name if last_modified_user else None,
+        last_modified_by_email=last_modified_user.email if last_modified_user else None,
         config=exp.config, design_summary=exp.design_summary,
         created_at=exp.created_at, started_at=exp.started_at,
         completed_at=exp.completed_at, archived_at=exp.archived_at,
@@ -216,13 +248,32 @@ def download_samples_zip(name: str, user: CurrentUser = Depends(get_current_user
 
 @router.get("/{name}/results")
 def get_results(name: str, user: CurrentUser = Depends(get_current_user)) -> dict:
-    from abkit.db.repositories import ResultRepo
+    """results.results as-is (ядро AnalysisResults.to_json() + chart_data,
+    см. _save_analysis) плюс "run_meta" — не часть ядрового формата, только
+    для строки "Analyzed N ago with dataset X (run #K)" на вкладке Results
+    (UX package, п.3). run_number = порядковый номер ЭТОГО прогона среди всех
+    прогонов эксперимента; для latest_for_experiment() он всегда равен
+    текущему count_for_experiment() (это же и есть последний прогон)."""
+    from abkit.db.repositories import DatasetRepo, ResultRepo
 
     exp = _get_experiment_or_404(name)
     result = ResultRepo().latest_for_experiment(exp.id)
     if result is None:
         raise APIError(404, "not_found", "Analysis results for this experiment are not ready yet")
-    return result.results
+
+    dataset_filename = None
+    if result.dataset_id:
+        dataset = DatasetRepo().get_by_id(result.dataset_id)
+        dataset_filename = dataset.filename if dataset else None
+
+    return {
+        **result.results,
+        "run_meta": {
+            "created_at": result.created_at.isoformat(),
+            "dataset_filename": dataset_filename,
+            "run_number": ResultRepo().count_for_experiment(exp.id),
+        },
+    }
 
 
 @router.get("/{name}/audit", response_model=PaginatedAudit)
@@ -405,7 +456,9 @@ def _load_dataset_df(dataset_id: str) -> pd.DataFrame:
     return pd.read_csv(dataset.storage_path)
 
 
-def _save_analysis(name: str, results) -> None:
+def _save_analysis(
+    name: str, results, *, dataset_id: uuid_mod.UUID | None = None, created_by: uuid_mod.UUID | None = None,
+) -> None:
     """report()+save_analysis_result — ПОСЛЕ этого GET /{name}/results
     (R2) возвращает настоящий результат, а не 404 (analysis_results иначе
     никогда не заполняется — save_analysis_result определен, но раньше нигде
@@ -416,7 +469,11 @@ def _save_analysis(name: str, results) -> None:
     FRONTEND.md §5.2), посчитанные из results.context (raw_values/
     segment_results/daily_results), которого нет в to_json(). AnalysisResults.
     to_json() (ядро, abkit/analysis/results.py) не меняется — им по-прежнему
-    пользуется CLI без каких-либо отличий."""
+    пользуется CLI без каких-либо отличий.
+
+    dataset_id/created_by — для "Analyzed N ago with dataset X (run #K)" на
+    вкладке Results (UX package, п.3); None для demo-анализа (нет
+    загруженного датасета, только сгенерированные данные)."""
     import json
 
     from backend.chart_data import build_chart_data, sanitize_json_floats
@@ -425,7 +482,10 @@ def _save_analysis(name: str, results) -> None:
     payload = json.loads(results.to_json())
     payload["chart_data"] = build_chart_data(results)
     payload = sanitize_json_floats(payload)
-    DbExperimentStore().save_analysis_result(name, json.dumps(payload, ensure_ascii=False), report_path)
+    DbExperimentStore().save_analysis_result(
+        name, json.dumps(payload, ensure_ascii=False), report_path,
+        dataset_id=dataset_id, created_by=created_by,
+    )
 
 
 @router.post("/{name}/analyze", response_model=JobAccepted, status_code=202)
@@ -447,7 +507,10 @@ def start_analyze(
             compare_methods=body.compare_methods, date_col=body.date_col,
             progress_callback=reporter.stage,
         )
-        _save_analysis(name, results)
+        _save_analysis(
+            name, results,
+            dataset_id=uuid_mod.UUID(body.dataset_id), created_by=uuid_mod.UUID(user.id),
+        )
         return {"experiment_name": name}
 
     job = runner.submit("analyze", uuid_mod.UUID(user.id), _run)
@@ -473,7 +536,7 @@ def start_analyze_demo(
             experiment.config, experiment.assignments, effect=body.effect
         )
         results = run_analyze(user, experiment, data, progress_callback=reporter.stage)
-        _save_analysis(name, results)
+        _save_analysis(name, results, created_by=uuid_mod.UUID(user.id))
         return {"experiment_name": name}
 
     job = runner.submit("analyze_demo", uuid_mod.UUID(user.id), _run)

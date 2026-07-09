@@ -53,6 +53,13 @@ class ExperimentDetail(BaseModel):
     owner_first_name: str | None
     owner_last_name: str | None
     can_edit: bool
+    # Header "Last modified by X Y N ago" (UX package, п.4) — самое свежее
+    # из audit_log (статус/публикация/переименование/properties/analyze) и
+    # experiment_blocks.updated_at/updated_by (блоки НЕ аудируются отдельно).
+    last_modified_at: datetime | None
+    last_modified_by_first_name: str | None
+    last_modified_by_last_name: str | None
+    last_modified_by_email: str | None
     config: dict[str, Any]
     # Реальная колонка Experiment.design_summary — сегодня всегда None
     # (create_experiment ее не заполняет, см. abkit/db/store.py), но поле

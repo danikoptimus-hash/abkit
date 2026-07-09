@@ -6,7 +6,7 @@ import { EditOutlined, SaveOutlined, CloseOutlined, MoreOutlined, DeleteOutlined
 import { apiClient, errorMessage } from '../../api/client'
 import { DeleteExperimentModal } from '../../components/DeleteExperimentModal'
 import { ExperimentPropertiesModal } from '../../components/ExperimentPropertiesModal'
-import { UserAvatar } from '../../components/UserAvatar'
+import { RelativeTime } from '../../components/RelativeTime'
 import { DesignSection } from './DesignSection'
 import { AnalyzeSection } from './AnalyzeSection'
 import { ResultsSection } from './ResultsSection'
@@ -44,6 +44,23 @@ function PublicationBadge({
   )
   if (!canEdit) return tag
   return <Tooltip title={isPublished ? 'Click to unpublish' : 'Click to publish'}>{tag}</Tooltip>
+}
+
+function LastModifiedText({
+  at, firstName, lastName, email,
+}: {
+  at: string | null
+  firstName: string | null
+  lastName: string | null
+  email: string | null
+}) {
+  if (!at) return null
+  const name = `${firstName ?? ''} ${lastName ?? ''}`.trim() || email || 'Unknown'
+  return (
+    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+      Last modified by {name} <RelativeTime iso={at} />
+    </Typography.Text>
+  )
 }
 
 function StatusBadge({
@@ -228,16 +245,12 @@ export function ExperimentPage() {
           onToggle={handleTogglePublication}
         />
         <StatusBadge status={data.status} canEdit={canEdit && !editing} onChange={handleStatusChange} />
-        {data.owner_id && (
-          <UserAvatar
-            user={{
-              id: data.owner_id,
-              firstName: data.owner_first_name ?? '',
-              lastName: data.owner_last_name ?? '',
-              email: data.owner_email ?? '',
-            }}
-          />
-        )}
+        <LastModifiedText
+          at={data.last_modified_at}
+          firstName={data.last_modified_by_first_name}
+          lastName={data.last_modified_by_last_name}
+          email={data.last_modified_by_email}
+        />
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           {canEdit && !editing && (

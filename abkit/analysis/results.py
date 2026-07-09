@@ -230,21 +230,26 @@ class AnalysisResults:
         отформатированными значениями — единый источник для HTML-отчета
         (report.py) и CSV-выгрузки (report()). React-UI использует свою копию
         (frontend/src/pages/experiment/DetailedResultsTable.tsx) — держит
-        английские заголовки в синхроне с этими вручную."""
+        английские заголовки в синхроне с этими вручную.
+
+        Без колонки "Designed" (UX-пакет, п.5.1) — designed-метод при
+        нескольких методах (compare_methods) выделяется жирной строкой
+        (report.py передает designed-флаг в шаблон отдельно от этого dict,
+        через detailed_rows(); React-таблица — через rowClassName), отдельная
+        колонка с галкой избыточна."""
         rows = self.detailed_rows(control_name, alpha=alpha)
         return [
             {
                 "Metric": row["metric"],
                 "Comparison group": row["group"],
                 "Method": row["method"],
-                "Designed": "✓" if row["designed"] else "",
-                "Effect (abs)": row["effect_abs"],
-                "Effect (rel, %)": (
+                "Effect (abs.)": row["effect_abs"],
+                "Lift %": (
                     row["effect_rel"] * 100 if row["effect_rel"] == row["effect_rel"] else None
                 ),
-                "95% CI (rel.)": f"[{row['ci_rel_lo'] * 100:.2f}%, {row['ci_rel_hi'] * 100:.2f}%]",
+                "95% CI of lift": f"[{row['ci_rel_lo'] * 100:.2f}%, {row['ci_rel_hi'] * 100:.2f}%]",
                 "p-value": row["p_value"],
-                "p-adj": row["p_value_adjusted"],
+                "p-value (adj.)": row["p_value_adjusted"],
                 "Correction": row["correction_method"],
                 "n (control)": row["n_control"],
                 "n (test)": row["n_test"],

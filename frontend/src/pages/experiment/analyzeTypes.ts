@@ -80,6 +80,12 @@ export interface ChartData {
   metrics: Record<string, MetricChartData>
 }
 
+export interface RunMeta {
+  created_at: string
+  dataset_filename: string | null
+  run_number: number
+}
+
 export interface AnalysisResultsOut {
   abkit_version: string
   seed: number | null
@@ -87,6 +93,7 @@ export interface AnalysisResultsOut {
   global_warnings: string[]
   results: TestResultOut[]
   chart_data: ChartData
+  run_meta: RunMeta
 }
 
 export function resultsByMetric(results: TestResultOut[]): Record<string, TestResultOut[]> {

@@ -136,6 +136,57 @@ def test_get_experiment_detail_404_for_missing(app_client):
     assert resp.json()["error"]["code"] == "not_found"
 
 
+def test_get_experiment_last_modified_is_null_when_never_edited(app_client):
+    """_make_experiment() creates the row directly via the repo (not through
+    a job), so there's no audit_log entry and no block edit — the header's
+    "Last modified by" has nothing to show yet."""
+    _login(app_client)
+    _make_experiment("exp_never_edited")
+    body = app_client.get("/api/v1/experiments/exp_never_edited").json()
+    assert body["last_modified_at"] is None
+    assert body["last_modified_by_email"] is None
+
+
+def test_get_experiment_last_modified_reflects_latest_status_change(app_client):
+    owner_id = UserRepo().create(
+        email="owner_lastmod@co.com", first_name="Last", last_name="Mod", password_hash=hash_password("pw12345"), role="editor"
+    )
+    _make_experiment("exp_lastmod_status", owner_id=owner_id)
+
+    app_client.post("/api/v1/auth/login", json={"email": "owner_lastmod@co.com", "password": "pw12345"})
+    resp = app_client.post("/api/v1/experiments/exp_lastmod_status/status", json={"to": "running"})
+    assert resp.status_code == 200
+
+    body = app_client.get("/api/v1/experiments/exp_lastmod_status").json()
+    assert body["last_modified_at"] is not None
+    assert body["last_modified_by_email"] == "owner_lastmod@co.com"
+    assert body["last_modified_by_first_name"] == "Last"
+
+
+def test_get_experiment_last_modified_reflects_block_edit_when_more_recent(app_client):
+    """A block edit alone (no status/publication/rename/properties change)
+    still updates "Last modified by" — blocks aren't in audit_log, only
+    experiment_blocks.updated_at/updated_by track it."""
+    owner_id = UserRepo().create(
+        email="owner_blockmod@co.com", first_name="Block", last_name="Editor", password_hash=hash_password("pw12345"), role="editor"
+    )
+    _make_experiment("exp_lastmod_blocks", owner_id=owner_id)
+
+    app_client.post("/api/v1/auth/login", json={"email": "owner_blockmod@co.com", "password": "pw12345"})
+    existing = app_client.get("/api/v1/experiments/exp_lastmod_blocks/blocks").json()
+    hypothesis = next(b for b in existing if b["kind"] == "hypothesis")
+    resp = app_client.put(
+        "/api/v1/experiments/exp_lastmod_blocks/blocks",
+        json=[{"id": hypothesis["id"], "kind": "hypothesis", "title": "H", "content_md": "edited", "position": 0}],
+    )
+    assert resp.status_code == 200
+
+    body = app_client.get("/api/v1/experiments/exp_lastmod_blocks").json()
+    assert body["last_modified_at"] is not None
+    assert body["last_modified_by_email"] == "owner_blockmod@co.com"
+    assert body["last_modified_by_first_name"] == "Block"
+
+
 def test_experiment_reports_and_samples_from_artifact_dir(app_client, tmp_path, monkeypatch):
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _login(app_client)

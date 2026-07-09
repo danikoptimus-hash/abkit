@@ -33,6 +33,19 @@ _env.globals["help_details"] = lambda chart_type, table=False: Markup(
 )
 _env.globals["chart_warning"] = get_warning
 
+# Column-header tooltips for the detailed results table (UX package, 5.2) —
+# keep the wording in sync with the React copy,
+# frontend/src/pages/experiment/DetailedResultsTable.tsx.
+DETAILED_COLUMN_TOOLTIPS: dict[str, str] = {
+    "Effect (abs.)": "Absolute difference in metric units (test − control)",
+    "Lift %": "Relative effect: (test − control) / control",
+    "95% CI of lift": "Confidence interval of the relative effect (lift), not of the metric itself",
+    "p-value (adj.)": (
+        "p-value adjusted for multiple comparisons (see Correction). Decision is made on "
+        "this value. Equals raw p-value when there is only one primary hypothesis"
+    ),
+}
+
 
 def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
     """Строит report.html: 8 секций из DESIGN.md (раздел 8)."""
@@ -126,6 +139,10 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
 
     detailed_rows = results.detailed_display_rows(control_name)
     detailed_columns = list(detailed_rows[0].keys()) if detailed_rows else []
+    # detailed_display_rows() no longer carries a "Designed" column (UX
+    # package, 5.1) — the designed-method row is still bolded, using the
+    # flag from the internal (non-display) detailed_rows(), same order.
+    detailed_designed_flags = [row["designed"] for row in results.detailed_rows(control_name)]
 
     template = _env.get_template("report.html.j2")
     return template.render(
@@ -141,6 +158,8 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
         metric_sections=metric_sections,
         detailed_columns=detailed_columns,
         detailed_rows=detailed_rows,
+        detailed_designed_flags=detailed_designed_flags,
+        detailed_column_tooltips=DETAILED_COLUMN_TOOLTIPS,
         abkit_version=abkit_version,
         product_name=PRODUCT_NAME,
         seed=config.seed,

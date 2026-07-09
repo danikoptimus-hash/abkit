@@ -1,4 +1,4 @@
-import { Typography, Table, Tag, Space, Button, Alert, Descriptions, Collapse } from 'antd'
+import { Typography, Table, Tag, Space, Button, Alert, Descriptions } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import { getComputed } from './types'
 import type { ComputedDesignSummary } from './types'
@@ -76,7 +76,7 @@ function ConfigSummary({ config }: { config: Record<string, unknown> }) {
 
   return (
     <>
-      <Descriptions bordered column={1} size="small" style={{ marginBottom: 12 }}>
+      <Descriptions bordered column={1} size="small" style={{ marginBottom: 24 }}>
         <Descriptions.Item label="Groups">{formatGroups(config)}</Descriptions.Item>
         <Descriptions.Item label="Metrics">
           <Space direction="vertical" size={2}>
@@ -98,22 +98,6 @@ function ConfigSummary({ config }: { config: Record<string, unknown> }) {
           Seed: {seed}
         </Typography.Text>
       )}
-      <Collapse
-        ghost
-        size="small"
-        style={{ marginTop: 8, marginBottom: 24 }}
-        items={[
-          {
-            key: 'raw',
-            label: 'Raw config (JSON)',
-            children: (
-              <pre style={{ background: '#F7F7F7', padding: 12, borderRadius: 4, overflow: 'auto', fontSize: 12 }}>
-                {JSON.stringify(config, (k, v) => (k === 'computed' ? undefined : v), 2)}
-              </pre>
-            ),
-          },
-        ]}
-      />
     </>
   )
 }

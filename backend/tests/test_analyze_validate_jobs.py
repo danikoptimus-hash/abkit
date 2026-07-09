@@ -98,6 +98,63 @@ def test_analyze_requires_dataset_and_populates_results_endpoint(app_client, tmp
     assert "report.html" in detail["available_reports"]
 
 
+def test_re_analyze_creates_new_history_row_and_updates_run_meta(app_client, tmp_path, monkeypatch):
+    """UX package, п.3 (Re-run analysis): a second analyze run doesn't
+    overwrite the first — GET .../results returns the LATEST run, with
+    run_meta.run_number counting up and dataset_filename reflecting whichever
+    dataset that specific run used."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "rerun_exp")
+
+    first_dataset_id = _upload_csv(
+        app_client, _post_csv(seed_offset=0), kind="post_analysis", experiment_name="rerun_exp"
+    )
+    resp1 = app_client.post(
+        "/api/v1/experiments/rerun_exp/analyze", json={"dataset_id": first_dataset_id},
+    )
+    job1 = _poll_job(app_client, resp1.json()["job_id"])
+    assert job1["status"] == "completed", job1
+
+    results1 = app_client.get("/api/v1/experiments/rerun_exp/results").json()
+    assert results1["run_meta"]["run_number"] == 1
+    assert results1["run_meta"]["dataset_filename"] == "data.csv"
+    assert results1["run_meta"]["created_at"]
+
+    second_dataset_id = _upload_csv(
+        app_client, _post_csv(seed_offset=7), kind="post_analysis", experiment_name="rerun_exp"
+    )
+    resp2 = app_client.post(
+        "/api/v1/experiments/rerun_exp/analyze", json={"dataset_id": second_dataset_id},
+    )
+    job2 = _poll_job(app_client, resp2.json()["job_id"])
+    assert job2["status"] == "completed", job2
+
+    results2 = app_client.get("/api/v1/experiments/rerun_exp/results").json()
+    assert results2["run_meta"]["run_number"] == 2
+
+    from abkit.db.repositories import ExperimentRepo, ResultRepo
+
+    exp = ExperimentRepo().get_by_name("rerun_exp")
+    assert ResultRepo().count_for_experiment(exp.id) == 2
+
+
+def test_analyze_demo_run_meta_has_no_dataset_filename(app_client, tmp_path, monkeypatch):
+    """Demo analysis has no uploaded dataset behind it — run_meta should say
+    so gracefully (null filename) rather than 500 or lie about a file."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "demo_run_meta_exp")
+
+    resp = app_client.post("/api/v1/experiments/demo_run_meta_exp/analyze/demo", json={"effect": 0.03})
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "completed", job
+
+    results = app_client.get("/api/v1/experiments/demo_run_meta_exp/results").json()
+    assert results["run_meta"]["dataset_filename"] is None
+    assert results["run_meta"]["run_number"] == 1
+
+
 def test_analyze_demo_generates_post_data_itself(app_client, tmp_path, monkeypatch):
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _login(app_client)

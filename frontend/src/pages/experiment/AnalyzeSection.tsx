@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Upload, Button, Space, Select, Checkbox, Typography, Alert, Progress, Tooltip } from 'antd'
-import { InboxOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { InboxOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UploadProps } from 'antd'
 import { apiClient, errorMessage, toFormData } from '../../api/client'
@@ -28,6 +28,10 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
   const [compareMethods, setCompareMethods] = useState(false)
   const [dateCol, setDateCol] = useState<string | undefined>(undefined)
 
+  // null = follow the default (open until the first result exists, then
+  // collapsed behind "Re-run analysis" — UX package, п.3).
+  const [panelOverride, setPanelOverride] = useState<boolean | null>(null)
+
   const { phase, stage, error, poll, reset } = useJobPolling<{ experiment_name: string }>()
 
   // Same query key as ResultsSection (Results tab) — shares one cache entry,
@@ -37,6 +41,16 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
     queryKey: experimentResultsQueryKey(experimentName),
     queryFn: () => fetchExperimentResults(experimentName),
   })
+
+  const panelOpen = panelOverride ?? !results
+
+  const openRerunPanel = () => {
+    setDatasetId(null)
+    setPostColumns([])
+    setDateCol(undefined)
+    reset()
+    setPanelOverride(true)
+  }
 
   const uploadProps: UploadProps = {
     accept: '.csv',
@@ -77,7 +91,8 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
       return
     }
     await poll(data.job_id)
-    queryClient.invalidateQueries({ queryKey: experimentResultsQueryKey(experimentName) })
+    await queryClient.invalidateQueries({ queryKey: experimentResultsQueryKey(experimentName) })
+    setPanelOverride(false)
   }
 
   const runAnalyzeDemo = async () => {
@@ -91,30 +106,21 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
       return
     }
     await poll(data.job_id)
-    queryClient.invalidateQueries({ queryKey: experimentResultsQueryKey(experimentName) })
+    await queryClient.invalidateQueries({ queryKey: experimentResultsQueryKey(experimentName) })
+    setPanelOverride(false)
   }
 
   return (
     <div>
       {uploadError && <Alert type="error" showIcon message={uploadError} style={{ marginBottom: 16 }} closable onClose={() => setUploadError(null)} />}
 
-      {phase !== 'running' && (
+      {panelOpen && phase !== 'running' && (
         <>
-          <Space align="start" size={16} style={{ marginBottom: 16 }}>
-            <Dragger {...uploadProps} style={{ width: 420 }} disabled={uploading}>
-              <p className="ant-upload-drag-icon">
-                <InboxOutlined />
-              </p>
-              <p>Upload post-period data (CSV)</p>
-            </Dragger>
-            <Tooltip title={hasAssignments ? '' : 'No assignments for this experiment'}>
-              <Button icon={<ThunderboltOutlined />} disabled={!hasAssignments} onClick={runAnalyzeDemo}>
-                Generate demo post-period data (+3% effect)
-              </Button>
-            </Tooltip>
-          </Space>
-
-          <Space wrap style={{ marginBottom: 16 }}>
+          {/* Analysis options — read at the moment the run starts, so they
+              need to be set BEFORE uploading/running, not after (UX package,
+              п.2). Date column only appears once a file's columns are known,
+              but stays grouped here with the rest of the options. */}
+          <Space wrap style={{ marginBottom: 8 }}>
             <Select
               style={{ width: 220 }}
               value={correction}
@@ -137,11 +143,25 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
             )}
           </Space>
           {postColumns.length > 0 && (
-            <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+            <Typography.Paragraph type="secondary" style={{ marginTop: -4, marginBottom: 16 }}>
               If the data has multiple rows per user (broken down by day), specify the date column — the app
               will automatically aggregate them for the main analysis and build a daily cumulative lift chart.
             </Typography.Paragraph>
           )}
+
+          <Space align="start" size={16} style={{ marginBottom: 16 }}>
+            <Dragger {...uploadProps} style={{ width: 420 }} disabled={uploading}>
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p>Upload post-period data (CSV)</p>
+            </Dragger>
+            <Tooltip title={hasAssignments ? '' : 'No assignments for this experiment'}>
+              <Button icon={<ThunderboltOutlined />} disabled={!hasAssignments} onClick={runAnalyzeDemo}>
+                Generate demo post-period data (+3% effect)
+              </Button>
+            </Tooltip>
+          </Space>
 
           {datasetId && (
             <Button type="primary" onClick={runAnalyze} style={{ marginBottom: 24 }}>
@@ -160,6 +180,12 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
 
       {phase === 'failed' && error && (
         <Alert type="error" showIcon message={error} style={{ marginBottom: 24 }} />
+      )}
+
+      {results && !panelOpen && (
+        <Button icon={<ReloadOutlined />} onClick={openRerunPanel} style={{ marginBottom: 16 }}>
+          Re-run analysis
+        </Button>
       )}
 
       {results && <AnalyzeResults data={results} />}

@@ -228,7 +228,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Results */
+        /**
+         * Get Results
+         * @description results.results as-is (ядро AnalysisResults.to_json() + chart_data,
+         *     см. _save_analysis) плюс "run_meta" — не часть ядрового формата, только
+         *     для строки "Analyzed N ago with dataset X (run #K)" на вкладке Results
+         *     (UX package, п.3). run_number = порядковый номер ЭТОГО прогона среди всех
+         *     прогонов эксперимента; для latest_for_experiment() он всегда равен
+         *     текущему count_for_experiment() (это же и есть последний прогон).
+         */
         get: operations["get_results_api_v1_experiments__name__results_get"];
         put?: never;
         post?: never;
@@ -935,6 +943,14 @@ export interface components {
             owner_last_name: string | null;
             /** Can Edit */
             can_edit: boolean;
+            /** Last Modified At */
+            last_modified_at: string | null;
+            /** Last Modified By First Name */
+            last_modified_by_first_name: string | null;
+            /** Last Modified By Last Name */
+            last_modified_by_last_name: string | null;
+            /** Last Modified By Email */
+            last_modified_by_email: string | null;
             /** Config */
             config: {
                 [key: string]: unknown;

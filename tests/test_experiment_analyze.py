@@ -474,7 +474,7 @@ def test_detailed_rows_no_variance_reduction_shows_dash(tmp_path):
     assert all(r["variance_reduction"] == "—" for r in rows)
 
 
-def test_detailed_display_rows_have_russian_column_headers(tmp_path):
+def test_detailed_display_rows_have_readable_column_headers(tmp_path):
     experiment = design_simple_experiment(tmp_path)
     rng = np.random.default_rng(15)
     assignments = experiment.assignments
@@ -489,14 +489,15 @@ def test_detailed_display_rows_have_russian_column_headers(tmp_path):
     results = experiment.analyze(post_data)
     rows = results.detailed_display_rows(results.context["control_name"])
     assert rows
+    # No "Designed" column (UX package, 5.1) — the designed method is
+    # distinguished by bolding the row instead, driven by detailed_rows()'s
+    # "designed" flag separately (see abkit/viz/report.py).
     expected_columns = {
-        "Metric", "Comparison group", "Method", "Designed", "Effect (abs)",
-        "Effect (rel, %)", "95% CI (rel.)", "p-value", "p-adj", "Correction",
+        "Metric", "Comparison group", "Method", "Effect (abs.)",
+        "Lift %", "95% CI of lift", "p-value", "p-value (adj.)", "Correction",
         "n (control)", "n (test)", "Variance reduction", "Verdict",
     }
     assert set(rows[0].keys()) == expected_columns
-    designed_row = next(r for r in rows if r["Designed"] == "✓")
-    assert designed_row is not None
 
 
 def test_analyze_compare_methods_adds_alternative_chains(tmp_path):

@@ -82,17 +82,29 @@ class DbExperimentStore:
         path = self._artifact_dir(name)
         return ExperimentHandle(name=name, path=path, config=config, assignments=assignments)
 
-    def save_analysis_result(self, name: str, results_json: str, report_path: Path) -> None:
+    def save_analysis_result(
+        self,
+        name: str,
+        results_json: str,
+        report_path: Path,
+        *,
+        dataset_id: uuid_mod.UUID | None = None,
+        created_by: uuid_mod.UUID | None = None,
+    ) -> None:
         """Пишет строку в analysis_results (jsonb с results.json целиком) —
         вызывается из Experiment.analyze() в db-режиме после Analysis Results
-        сформированы, для трассируемости (какие результаты когда получены)."""
+        сформированы, для трассируемости (какие результаты когда получены).
+        Каждый вызов — новая строка (история прогонов не затирается, UX-пакет
+        п.3: "Re-run analysis"); dataset_id/created_by нужны для отображения
+        "Analyzed N ago with dataset X (run #K)" на вкладке Results."""
         import json
 
         exp_row = self.experiments.get_by_name(name)
         if exp_row is None:
             raise DbStoreError(f"Experiment '{name}' not found")
         self.results.create(
-            experiment_id=exp_row.id, results=json.loads(results_json), report_path=str(report_path)
+            experiment_id=exp_row.id, results=json.loads(results_json), report_path=str(report_path),
+            dataset_id=dataset_id, created_by=created_by,
         )
 
     def occupied_units(

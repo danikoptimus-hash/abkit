@@ -20,6 +20,18 @@ test('clicking the Draft/Published badge toggles publication status', async ({ p
   await expect(page.getByText('draft', { exact: true })).toBeVisible()
 })
 
+test('header shows "Last modified by" instead of an owner avatar', async ({ page, request }) => {
+  const name = `e2e_lastmod_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+  await page.goto(`/experiments/${name}`)
+
+  // Design already audits "experiment.create" — the header has something to
+  // show right after seeding, no further edit needed (UX package, п.4).
+  await expect(page.getByText(/Last modified by E2E Admin/)).toBeVisible()
+  await expect(page.locator('.ant-avatar')).toHaveCount(0)
+})
+
 test('status badge dropdown transitions the operational status', async ({ page, request }) => {
   const name = `e2e_statusbadge_${Date.now()}`
   await seedExperiment(request, name)

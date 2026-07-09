@@ -7,6 +7,7 @@ import { HelpCollapse } from './HelpCollapse'
 import { MarkdownBlockView } from './MarkdownBlockView'
 import type { BlockDraft } from './MarkdownBlockView'
 import { experimentResultsQueryKey, fetchExperimentResults } from './resultsQuery'
+import { RelativeTime } from '../../components/RelativeTime'
 
 interface Props {
   experimentName: string
@@ -31,6 +32,11 @@ export function ResultsSection({ experimentName, blocks, editing, onChangeBlock,
     <div>
       {results ? (
         <>
+          <Typography.Paragraph type="secondary" style={{ marginTop: -4, marginBottom: 16, fontSize: 13 }}>
+            Analyzed <RelativeTime iso={results.run_meta.created_at} /> with{' '}
+            {results.run_meta.dataset_filename ?? 'demo data'} (run #{results.run_meta.run_number})
+          </Typography.Paragraph>
+
           <VerdictCards results={results.results} />
 
           <Typography.Title level={4} style={{ marginTop: 8 }}>
