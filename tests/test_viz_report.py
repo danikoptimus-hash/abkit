@@ -81,6 +81,29 @@ def test_design_report_has_absolute_mde_columns(tmp_path):
     assert "pp</td>" in html
 
 
+def test_design_report_shows_strata_info_and_balance_table(tmp_path):
+    """6-part package pt.10: explicit "Stratified by: ..." sentence plus a
+    per-stratum-per-group balance table (the crosstab was already computed
+    for the chi2 test, just never rendered beyond the pass/fail badge)."""
+    experiment = _demo_design(tmp_path, strata=["platform"])
+    html = (experiment.path / "design_report.html").read_text(encoding="utf-8")
+    assert "Stratified by:" in html
+    assert "platform" in html
+    assert "strata after combination" in html
+    assert "min stratum size:" in html
+    # ios/android crosstab counts render as an actual table, not just chi2/p
+    # (stratum values are row data; group names are the column headers).
+    assert "<th>control</th>" in html and "<th>treatment</th>" in html
+    assert "<td>ios</td>" in html or "<td>android</td>" in html
+
+
+def test_design_report_shows_no_stratification_for_unstratified_simple_split(tmp_path):
+    experiment = _demo_design(tmp_path, strata=[])
+    html = (experiment.path / "design_report.html").read_text(encoding="utf-8")
+    assert "No stratification" in html
+    assert "Stratified by:" not in html
+
+
 def test_design_report_opens_offline_no_external_deps(tmp_path):
     experiment = _demo_design(tmp_path)
     html = (experiment.path / "design_report.html").read_text(encoding="utf-8")

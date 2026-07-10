@@ -10,10 +10,12 @@ import logo from '../assets/logo.png'
 const { Header, Content } = Layout
 
 // Верхняя навигация как Dashboards/Charts/Datasets в Superset (FRONTEND.md §1).
+// Validation moved to Settings > Tools (6-part package pt.11) — it's a
+// service tool for validating an existing design, not a primary object like
+// A/B Tests or Datasets, so it doesn't belong at this level anymore.
 const NAV_ITEMS = [
   { key: '/experiments', label: <Link to="/experiments">A/B Tests</Link> },
   { key: '/datasets', label: <Link to="/datasets">Datasets</Link> },
-  { key: '/validation', label: <Link to="/validation">Validation</Link> },
 ]
 
 export function AppLayout() {
@@ -33,10 +35,15 @@ export function AppLayout() {
   })
 
   // Settings menu (Superset-style, UX package section 6): Security
-  // (admin-only) / User / About, grouped with dividers. Replaces the old
-  // avatar+name dropdown that mixed admin links into a generic user menu.
-  // "List Roles" is intentionally not included — roles are fixed
-  // (viewer/editor/admin), there's nothing to manage.
+  // (admin-only) / Data (admin-only) / Tools (editor+admin) / User / About,
+  // grouped with dividers. Replaces the old avatar+name dropdown that mixed
+  // admin links into a generic user menu. "List Roles" is intentionally not
+  // included — roles are fixed (viewer/editor/admin), there's nothing to
+  // manage. Tools (6-part package pt.11) sits between Data and User —
+  // Validation is a service tool for validating an existing design, not
+  // primary nav material, but still needs editor+ (not admin-only, unlike
+  // Security/Data), so it's a separate conditional block rather than folded
+  // into the admin-only one above.
   const settingsItems = [
     ...(user?.role === 'admin'
       ? [
@@ -46,6 +53,13 @@ export function AppLayout() {
           { type: 'divider' as const },
           { key: 'data-label', label: 'Data', type: 'group' as const },
           { key: 'db-connections', label: <Link to="/admin/db-connections">Database Connections</Link> },
+          { type: 'divider' as const },
+        ]
+      : []),
+    ...(user?.role === 'editor' || user?.role === 'admin'
+      ? [
+          { key: 'tools-label', label: 'Tools', type: 'group' as const },
+          { key: 'validation', label: <Link to="/settings/validation">Validation (A/A, A/B)</Link> },
           { type: 'divider' as const },
         ]
       : []),

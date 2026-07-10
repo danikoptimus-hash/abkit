@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { Typography, Button, Alert } from 'antd'
-import { DownloadOutlined } from '@ant-design/icons'
+import { Typography, Button, Alert, Space } from 'antd'
+import { DownloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { VerdictCards } from './AnalyzeResults'
 import { DetailedResultsTable } from './DetailedResultsTable'
 import { HelpCollapse } from './HelpCollapse'
@@ -52,14 +52,14 @@ export function ResultsSection({ experimentName, familySize, blocks, editing, on
           />
           <HelpCollapse chartType="verdicts_table" table />
 
-          <Button
-            icon={<DownloadOutlined />}
-            href={`/api/v1/experiments/${experimentName}/reports/report.html`}
-            target="_blank"
-            style={{ marginBottom: 24 }}
-          >
-            Download HTML Report
-          </Button>
+          <Space style={{ marginBottom: 24 }}>
+            <Button icon={<EyeOutlined />} href={`/api/v1/experiments/${experimentName}/reports/report.html`} target="_blank">
+              View report
+            </Button>
+            <Button icon={<DownloadOutlined />} href={`/api/v1/experiments/${experimentName}/reports/report.html?download=1`}>
+              Download
+            </Button>
+          </Space>
         </>
       ) : (
         <Alert

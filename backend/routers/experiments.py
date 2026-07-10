@@ -266,55 +266,88 @@ def put_experiment_tags(
     return [_to_tag_out(t) for t in tags]
 
 
-@router.get("/{name}/reports/{report_name}", response_class=HTMLResponse)
-def get_report(report_name: str, name: str, user: CurrentUser = Depends(get_current_user)) -> HTMLResponse:
+@router.get("/{name}/reports/{report_name}")
+def get_report(
+    report_name: str, name: str, download: bool = False, user: CurrentUser = Depends(get_current_user),
+) -> Response:
+    """6-part package pt.9: `?download=1` swaps the response from an inline
+    HTML view (opens in a new tab, browser renders it) to a file download
+    (Content-Disposition: attachment) named `<experiment>_<report_name>` —
+    the report is a self-contained single file either way (inlined logo/
+    charts/CSS, no external requests), so the downloaded copy opens offline
+    identically to the tab view."""
     _get_experiment_or_404(name)
     if report_name not in REPORT_FILENAMES:
         raise APIError(404, "not_found", f"Report '{report_name}' is not supported")
     report_path = _artifact_dir(name) / report_name
     if not report_path.exists():
         raise APIError(404, "not_found", f"Report '{report_name}' has not been created yet")
-    return HTMLResponse(content=report_path.read_text(encoding="utf-8"))
+    content = report_path.read_text(encoding="utf-8")
+    if download:
+        return Response(
+            content=content, media_type="text/html",
+            headers={"Content-Disposition": f'attachment; filename="{name}_{report_name}"'},
+        )
+    return HTMLResponse(content=content)
+
+
+def _load_group_assignments(exp) -> pd.DataFrame:
+    """6-part package pt.7 (bug fix): samples used to be read from a
+    `samples/*.csv` directory on disk — a file-mode-era artifact that
+    DbExperimentStore.create_experiment/replace_experiment never write (only
+    the file-mode ExperimentStore does, via abkit.storage.save_group_samples).
+    In ABKIT_MODE=db (what the backend always runs), that directory never
+    existed, so every download 404'd for every experiment, however real its
+    split was. Samples are generated on the fly from the assignments table
+    instead — the actual source of truth in db mode."""
+    from abkit.db.repositories import AssignmentRepo
+
+    return AssignmentRepo().load(exp.id)
+
+
+def _group_csv_bytes(group_df: pd.DataFrame) -> bytes:
+    return group_df[["unit_id", "group", "stratum"]].to_csv(index=False).encode("utf-8")
 
 
 @router.get("/{name}/samples", response_model=list[SampleInfo])
 def list_samples(name: str, user: CurrentUser = Depends(get_current_user)) -> list[SampleInfo]:
-    import pandas as pd
-
-    _get_experiment_or_404(name)
-    samples_dir = _artifact_dir(name) / "samples"
-    csv_paths = sorted(samples_dir.glob("*.csv")) if samples_dir.exists() else []
+    exp = _get_experiment_or_404(name)
+    assignments = _load_group_assignments(exp)
     return [
         SampleInfo(
-            filename=p.name, n_rows=len(pd.read_csv(p)), size_kb=round(p.stat().st_size / 1024, 1)
+            filename=f"{group_name}.csv", n_rows=len(group_df),
+            size_kb=round(len(_group_csv_bytes(group_df)) / 1024, 1),
         )
-        for p in csv_paths
+        for group_name, group_df in assignments.groupby("group", observed=True)
     ]
 
 
 @router.get("/{name}/samples/{filename}")
 def download_sample(name: str, filename: str, user: CurrentUser = Depends(get_current_user)) -> Response:
-    _get_experiment_or_404(name)
-    csv_path = _artifact_dir(name) / "samples" / filename
-    if csv_path.suffix != ".csv" or not csv_path.exists():
+    exp = _get_experiment_or_404(name)
+    if not filename.endswith(".csv"):
+        raise APIError(404, "not_found", f"File '{filename}' not found")
+    group_name = filename[: -len(".csv")]
+    assignments = _load_group_assignments(exp)
+    group_df = assignments[assignments["group"] == group_name]
+    if group_df.empty:
         raise APIError(404, "not_found", f"File '{filename}' not found")
     return Response(
-        content=csv_path.read_bytes(), media_type="text/csv",
+        content=_group_csv_bytes(group_df), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
 @router.get("/{name}/samples.zip")
 def download_samples_zip(name: str, user: CurrentUser = Depends(get_current_user)) -> StreamingResponse:
-    _get_experiment_or_404(name)
-    samples_dir = _artifact_dir(name) / "samples"
-    csv_paths = sorted(samples_dir.glob("*.csv")) if samples_dir.exists() else []
-    if not csv_paths:
+    exp = _get_experiment_or_404(name)
+    assignments = _load_group_assignments(exp)
+    if assignments.empty:
         raise APIError(404, "not_found", "No samples found for this experiment")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for csv_path in csv_paths:
-            zf.write(csv_path, arcname=csv_path.name)
+        for group_name, group_df in assignments.groupby("group", observed=True):
+            zf.writestr(f"{group_name}.csv", _group_csv_bytes(group_df))
     buffer.seek(0)
     return StreamingResponse(
         buffer, media_type="application/zip",

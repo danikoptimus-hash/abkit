@@ -18,15 +18,34 @@ import { MarkdownBlockView } from './MarkdownBlockView'
 import type { BlockDraft } from './MarkdownBlockView'
 import { hypothesisFamily } from './types'
 
-// Forward-only lifecycle with an "archived" escape hatch from anywhere, and
-// unarchiving back to any state — the backend doesn't enforce a state
-// machine (any status can be set to any other), this is just what the
-// status-badge dropdown offers as sensible next steps (UX package, 1.2).
+// The backend doesn't enforce a state machine (any status can be set to any
+// other, abkit/jobs.py::run_update_status) — this is what the status-badge
+// dropdown offers as sensible next steps (UX package, 1.2; backward
+// transitions added by the 6-part package pt.8). Forward transitions
+// (designed->running->completed, anything->archived) are frictionless;
+// backward ones (running->designed, completed->running, any unarchive) go
+// through backwardTransitionWarning's confirm modal below.
 const STATUS_TRANSITIONS: Record<string, string[]> = {
   designed: ['running', 'archived'],
-  running: ['completed', 'archived'],
-  completed: ['archived'],
+  running: ['completed', 'designed', 'archived'],
+  completed: ['running', 'archived'],
   archived: ['designed', 'running', 'completed'],
+}
+
+// null = forward transition, no friction. Non-null = backward — the
+// StatusBadge dropdown shows this as a confirm-modal body before calling
+// onChange (6-part package pt.8.2).
+function backwardTransitionWarning(from: string, to: string): string | null {
+  if (to === 'designed' && from !== 'designed') {
+    return "Returning to 'designed' implies the test has not started. Existing analyses will be KEPT; if you intend to change the design, use Redesign instead (it properly resets split and analyses)."
+  }
+  if (from === 'completed' && to === 'running') {
+    return 'Reopening a completed test. Note: extending a test after looking at results inflates false positive rates (peeking). Proceed only if the test was closed by mistake.'
+  }
+  if (from === 'archived') {
+    return `Unarchiving this experiment and moving it to '${to}'. Make sure this reflects its actual state — it will show up as active again wherever '${to}' experiments are surfaced.`
+  }
+  return null
 }
 
 function PublicationBadge({
@@ -85,7 +104,18 @@ function StatusBadge({
           ? transitions.map((s) => ({ key: s, label: `Move to ${s}` }))
           : [{ key: 'none', label: 'No transitions available', disabled: true }],
         onClick: ({ key }) => {
-          if (transitions.includes(key)) onChange(key)
+          if (!transitions.includes(key)) return
+          const warning = backwardTransitionWarning(status, key)
+          if (!warning) {
+            onChange(key)
+            return
+          }
+          Modal.confirm({
+            title: `Move to '${key}'?`,
+            content: warning,
+            okText: 'Continue',
+            onOk: () => onChange(key),
+          })
         },
       }}
     >

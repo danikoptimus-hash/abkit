@@ -13,7 +13,7 @@ import pandas as pd
 import yaml
 from markupsafe import Markup
 
-from abkit import PRODUCT_NAME, __version__ as abkit_version
+from abkit import PRODUCT_NAME, __version__ as abkit_version, checks
 from abkit.viz.help_texts import get_warning, render_help_html
 from abkit.viz.plots import (
     cumulative_lift_plot,
@@ -230,6 +230,13 @@ def render_design_report(experiment: Any) -> str:
         power_rows=power_rows,
         srm=report.srm,
         strata_balance=report.strata_balance,
+        # 6-part package pt.10: per-stratum-per-group counts + column order,
+        # derived from the same crosstab strata_balance.chi2 was computed
+        # from — plus the distinct stratum count for the "Stratified by: ..."
+        # sentence.
+        strata_balance_rows=checks.strata_balance_rows(report.strata_balance),
+        strata_balance_groups=checks.strata_balance_groups(report.strata_balance),
+        n_strata=len(report.strata_balance.table.index),
         pre_period_aa=report.pre_period_aa,
         strata_nan_rows=strata_nan_rows,
         n_dropped_for_nan_strata=report.n_dropped_for_nan_strata,

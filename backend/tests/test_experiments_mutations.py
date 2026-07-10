@@ -46,6 +46,123 @@ def test_change_status_404_for_missing_experiment(app_client):
     assert resp.status_code == 404
 
 
+def test_change_status_backward_transitions_allowed_and_audited(app_client):
+    """6-part package pt.8: the backend has never restricted direction (any
+    status -> any status, gated only by require_experiment_edit_access) —
+    the frontend's status-badge dropdown used to only OFFER forward
+    transitions, but the API itself already accepted backward ones. This
+    locks that in for running->designed, completed->running, and
+    archived->designed (unarchive), with audit_log recording from/to for
+    each, same as any other status change."""
+    from abkit.db.repositories import AuditRepo
+
+    owner_id = _login(app_client)
+    _make_experiment("backward_exp", status="completed", owner_id=owner_id)
+
+    resp = app_client.post("/api/v1/experiments/backward_exp/status", json={"to": "running"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
+
+    resp = app_client.post("/api/v1/experiments/backward_exp/status", json={"to": "designed"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "designed"
+
+    resp = app_client.post("/api/v1/experiments/backward_exp/status", json={"to": "archived"})
+    assert resp.status_code == 200
+
+    resp = app_client.post("/api/v1/experiments/backward_exp/status", json={"to": "designed"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "designed"
+
+    audit = AuditRepo().list_recent(
+        limit=10, action="experiment.status_change", object_name="backward_exp",
+    )
+    transitions = [(a.details["from"], a.details["to"]) for a in reversed(audit)]
+    assert transitions == [
+        ("completed", "running"),
+        ("running", "designed"),
+        ("designed", "archived"),
+        ("archived", "designed"),
+    ]
+
+
+def test_change_status_backward_transition_forbidden_for_non_owner_editor(app_client):
+    other_owner = UserRepo().create(
+        email="owner_backward@co.com", first_name="O", password_hash=hash_password("pw12345"), role="editor"
+    )
+    _make_experiment("backward_exp_guard", status="completed", owner_id=other_owner)
+
+    _login(app_client, email="not_owner_backward@co.com", role="editor")
+    resp = app_client.post("/api/v1/experiments/backward_exp_guard/status", json={"to": "running"})
+    assert resp.status_code == 403
+
+
+def test_unarchive_to_designed_reoccupies_units_for_isolation(app_client, tmp_path, monkeypatch):
+    """6-part package pt.8.4: isolation reads Experiment.status live
+    (abkit/db/repositories.py::_ACTIVE_STATUSES via a real-time query, not a
+    cached snapshot) — archiving an experiment frees its users for a new
+    design, and un-archiving it back to 'designed' must reserve them again."""
+    import time
+
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+
+    lines = ["user_id,revenue"] + [f"u{i},{100 + i % 10}" for i in range(50)]
+    csv_text = "\n".join(lines)
+
+    def _upload(name_hint: str) -> str:
+        resp = app_client.post(
+            "/api/v1/datasets", data={"kind": "pre_design"},
+            files={"file": (f"{name_hint}.csv", csv_text, "text/csv")},
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def _design(name: str, dataset_id: str, isolation: str) -> dict:
+        resp = app_client.post(
+            "/api/v1/design",
+            json={
+                "config": {
+                    "name": name, "unit_col": "user_id",
+                    "groups": {"control": 0.5, "treatment": 0.5},
+                    "metrics": [{"name": "revenue", "type": "continuous", "role": "primary"}],
+                    "sample_size": 50, "split_method": "simple",
+                    "isolation": isolation, "exclude_experiments": "all_active",
+                },
+                "dataset_id": dataset_id,
+            },
+        )
+        assert resp.status_code == 202, resp.text
+        job_id = resp.json()["job_id"]
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            job = app_client.get(f"/api/v1/jobs/{job_id}").json()
+            if job["status"] not in ("pending", "running"):
+                return job
+            time.sleep(0.05)
+        raise AssertionError("design job did not finish in time")
+
+    first_job = _design("isolation_base", _upload("base"), isolation="off")
+    assert first_job["status"] == "completed"
+
+    archive_resp = app_client.post("/api/v1/experiments/isolation_base/status", json={"to": "archived"})
+    assert archive_resp.status_code == 200
+
+    # Archived: its units are free — isolation=warn against the same pool
+    # must find no overlap.
+    free_job = _design("isolation_probe_free", _upload("probe_free"), isolation="warn")
+    assert free_job["status"] == "completed"
+
+    unarchive_resp = app_client.post("/api/v1/experiments/isolation_base/status", json={"to": "designed"})
+    assert unarchive_resp.status_code == 200
+
+    # Back to 'designed': its units are reserved again — isolation=warn
+    # against the same pool must now find the overlap and pause for confirm.
+    reoccupied_job = _design("isolation_probe_reoccupied", _upload("probe_reoccupied"), isolation="warn")
+    assert reoccupied_job["status"] == "requires_confirmation"
+    assert reoccupied_job["result"]["overlap"] > 0
+
+
 def test_patch_publication_status_toggle(app_client):
     owner_id = _login(app_client)
     _make_experiment("pub_toggle_exp", owner_id=owner_id)

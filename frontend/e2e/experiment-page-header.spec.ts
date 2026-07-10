@@ -44,6 +44,57 @@ test('status badge dropdown transitions the operational status', async ({ page, 
   await expect(page.getByText('running', { exact: true })).toBeVisible()
 })
 
+// 6-part package pt.8: forward transitions stay frictionless; backward ones
+// (here: running -> designed, then completed -> running) show a confirm
+// modal with a transition-specific warning before applying, and canceling
+// leaves the status untouched.
+test('backward status transitions show a confirm modal with transition-specific warnings', async ({
+  page,
+  request,
+}) => {
+  const name = `e2e_statusbackward_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+  await page.goto(`/experiments/${name}`)
+
+  await page.getByText('designed', { exact: true }).click()
+  await page.getByText('Move to running').click()
+  await expect(page.getByText('running', { exact: true })).toBeVisible()
+
+  // running -> designed: backward, confirm modal with the Redesign hint.
+  await page.getByText('running', { exact: true }).click()
+  await page.getByText('Move to designed').click()
+  const toDesignedDialog = page.getByRole('dialog').filter({ hasText: "Move to 'designed'?" })
+  await expect(toDesignedDialog).toBeVisible()
+  await expect(toDesignedDialog.getByText(/Existing analyses will be KEPT/)).toBeVisible()
+  await toDesignedDialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(toDesignedDialog).not.toBeVisible()
+  await expect(page.getByText('running', { exact: true })).toBeVisible() // canceled — unchanged
+
+  await page.getByText('running', { exact: true }).click()
+  await page.getByText('Move to designed').click()
+  await expect(toDesignedDialog).toBeVisible()
+  await toDesignedDialog.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByText('designed', { exact: true })).toBeVisible()
+
+  // designed -> running -> completed -> running: the last hop is backward
+  // (peeking warning).
+  await page.getByText('designed', { exact: true }).click()
+  await page.getByText('Move to running').click()
+  await expect(page.getByText('running', { exact: true })).toBeVisible()
+  await page.getByText('running', { exact: true }).click()
+  await page.getByText('Move to completed').click()
+  await expect(page.getByText('completed', { exact: true })).toBeVisible()
+
+  await page.getByText('completed', { exact: true }).click()
+  await page.getByText('Move to running').click()
+  const reopenDialog = page.getByRole('dialog').filter({ hasText: "Move to 'running'?" })
+  await expect(reopenDialog).toBeVisible()
+  await expect(reopenDialog.getByText(/inflates false positive rates \(peeking\)/)).toBeVisible()
+  await reopenDialog.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.getByText('running', { exact: true })).toBeVisible()
+})
+
 test('tabs switch and persist in the URL across a reload', async ({ page, request }) => {
   const name = `e2e_tabs_${Date.now()}`
   await seedExperiment(request, name)

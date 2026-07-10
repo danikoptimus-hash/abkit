@@ -94,7 +94,27 @@
 
 <section id="section-strata-balance">
   <h2>Stratum balance</h2>
+  <p>
+    {% if config.strata %}
+    Stratified by: <strong>{{ config.strata|join(', ') }}</strong> ({{ n_strata }} strata after combination, min stratum size: {{ config.min_stratum_size }})
+    {% elif config.split_method == 'hash' %}
+    Hash-based split (salt stored)
+    {% else %}
+    No stratification
+    {% endif %}
+  </p>
   <p class="badges"><span class="badge {{ 'ok' if strata_balance.passed else 'fail' }}">{{ 'ok' if strata_balance.passed else 'IMBALANCE' }} (p={{ '%.4g' % strata_balance.p_value }})</span></p>
+  {% if strata_balance_rows %}
+  <table>
+    <tr><th>Stratum</th>{% for g in strata_balance_groups %}<th>{{ g }}</th>{% endfor %}</tr>
+    {% for row in strata_balance_rows %}
+    <tr>
+      <td>{{ row.stratum }}</td>
+      {% for g in strata_balance_groups %}<td>{{ row[g] }}</td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 </section>
 
 <section id="section-srm">

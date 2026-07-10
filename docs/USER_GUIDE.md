@@ -32,7 +32,16 @@ Every experiment has two independent pieces of state:
   deliberate "this is ready for others to see" action, separate from whether
   the test itself has finished running.
 
-Both are toggled from clickable badges at the top of the experiment page.
+Both are toggled from clickable badges at the top of the experiment page. The
+status dropdown allows moving backward too (`completed` → `running`,
+`running` → `designed`, or un-archiving to any status) — each backward move
+asks you to confirm first, with a warning specific to what it means:
+returning to `designed` warns that existing analyses are kept (use
+**Redesign**, below, if you actually want to change the design); reopening a
+`completed` test warns about peeking (re-checking significance after
+extending data collection inflates the false-positive rate); un-archiving
+warns you to make sure that's really the state you want. Moving forward, or
+archiving from anywhere, stays frictionless — only backward moves ask.
 
 While an experiment is still `designed` (before you've moved it to
 `running`), its "⋯" menu offers **Redesign** — discard the current split,
@@ -66,6 +75,12 @@ Validation anymore — everything reads from a **dataset**, created once on the
 
 Both kinds show up identically in every dataset picker across the app.
 `[Screenshot: Datasets page with a mix of Upload and SQL-source rows]`
+
+Datasets are independent of any one experiment — **deleting an experiment
+never deletes the datasets it used.** Only that experiment's own assignments
+and analysis results go away; its datasets simply lose that one link and stay
+right where they were on the Datasets page, ready to be reused for another
+design. The experiment's delete confirmation spells this out explicitly.
 
 On the Datasets page, **Bulk select** (next to **+ Dataset**) turns on a
 checkbox column — select several datasets and **Delete** removes all of them
@@ -185,7 +200,12 @@ new one inline).
 
 **Run** produces the split plus a design report: sample size / MDE table per
 metric (with and without CUPED, and ρ — the pre/post correlation CUPED
-exploits), and the split-quality checks below.
+exploits), and the split-quality checks below. Both the design report and the
+analysis report (Results tab) offer **View report** (opens in a new browser
+tab) and **Download** (saves it as `<experiment>_design_report.html` /
+`<experiment>_report.html`) — either way it's the same self-contained file
+(charts, logo, and CSS all inlined), so the downloaded copy opens correctly
+offline, with no server needed.
 
 ### 3. Sample sizes and split checks
 
@@ -204,6 +224,14 @@ The design report always includes:
   baseline, shown on hover) — in percentage points for `binary` metrics
   (e.g. a 5% relative MDE on a 17.4% baseline conversion rate is "0.96 pp"),
   or in the metric's own units for `continuous` ones.
+- **Stratification** — the Design tab's Configuration panel and the design
+  report both state it explicitly: "Stratified by: gender, platform (12
+  strata after combination, min stratum size: 20)" when you stratified,
+  "Hash-based split (salt stored)" for a `hash` split, or "No
+  stratification" for a plain `simple` one. Either way there's a **strata
+  balance table** (counts per stratum per group) alongside the pass/fail
+  badge — it's the same crosstab the balance chi-square test is computed
+  from, just no longer hidden behind a single p-value.
 - **SRM check** (Sample Ratio Mismatch) — a chi-square test comparing the
   actual group sizes against the intended split ratio. If it fails
   (p < 0.001), don't trust downstream analysis until you find the cause (a
@@ -294,6 +322,12 @@ organization's searchable history of what's been tried and what happened,
 instead of living in someone's notebook.
 
 ## Validation: is the engine honest on your data?
+
+Reach it from **Settings → Tools → Validation (A/A, A/B)** (Editor+; Viewers
+don't see the menu item) — it's a service tool for validating a design, not
+one of the primary top-nav sections, so it lives in Settings rather than
+next to A/B Tests and Datasets. (The old `/validation` URL still works — it
+redirects to the new location.)
 
 Validation runs the whole statistical pipeline against *simulated* random
 splits of your own historical data — not to test a real hypothesis, but to

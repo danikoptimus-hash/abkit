@@ -269,14 +269,21 @@ def run_delete_experiment(current_user: CurrentUser, name: str) -> None:
     (require_experiment_edit_access — та же политика, что у смены статуса).
     Раньше было Admin-only без исключений; изменено по явному запросу
     пользователя (UX-правка, чтобы Editor мог убирать за собой свои же
-    эксперименты), затем расширено на experiment_access (UX-пакет)."""
+    эксперименты), затем расширено на experiment_access (UX-пакет).
+
+    Датасеты — самостоятельные сущности (CLAUDE.md, "правило") — НЕ
+    удаляются вместе с экспериментом: `datasets.experiment_id` теперь
+    ON DELETE SET NULL (миграция 0012, было CASCADE), так что их файлы на
+    диске трогать здесь нельзя (была ошибка ровно в эту сторону — снимался
+    файл, хотя строка датасета переживала бы правильный каскад). Только
+    experiment_datasets (линк-таблица использования) каскадно чистится —
+    это связь, не сам датасет."""
     exp_row = _get_experiment_row(name)
     require_experiment_edit_access(current_user, exp_row)
 
     import shutil
-    from pathlib import Path
 
-    from abkit.db.repositories import DatasetRepo, ExperimentRepo
+    from abkit.db.repositories import ExperimentRepo
 
     # счетчики нужны ДО удаления (после — каскад их уже снес) — только для
     # audit_log details, чтобы в журнале было видно, сколько именно данных
@@ -287,18 +294,6 @@ def run_delete_experiment(current_user: CurrentUser, name: str) -> None:
 
     exp_id = str(exp_row.id)
     with _timed("delete_experiment", user=current_user.email, experiment=name):
-        # Datasets linked via the legacy datasets.experiment_id FK (ON DELETE
-        # CASCADE) get their ROW removed automatically once the experiment
-        # goes, but cascade never touches files on disk — unlink them here,
-        # BEFORE the cascade fires, or they leak in _uploads/ forever
-        # (found via abkit-admin cleanup-dev: ~900 orphaned files had
-        # accumulated exactly this way). Datasets only linked through
-        # experiment_datasets (many-to-many, possibly shared with other
-        # experiments) are untouched, same as before.
-        for ds in DatasetRepo().list_for_experiment(exp_row.id):
-            path = Path(ds.storage_path)
-            if path.exists():
-                path.unlink()
         ExperimentRepo().delete(name)
         artifact_dir = DbExperimentStore().data_dir / name
         if artifact_dir.exists():

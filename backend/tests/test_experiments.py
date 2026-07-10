@@ -187,7 +187,7 @@ def test_get_experiment_last_modified_reflects_block_edit_when_more_recent(app_c
     assert body["last_modified_by_first_name"] == "Block"
 
 
-def test_experiment_reports_and_samples_from_artifact_dir(app_client, tmp_path, monkeypatch):
+def test_experiment_reports_from_artifact_dir(app_client, tmp_path, monkeypatch):
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _login(app_client)
     _make_experiment("exp_files")
@@ -195,9 +195,6 @@ def test_experiment_reports_and_samples_from_artifact_dir(app_client, tmp_path, 
     exp_dir = tmp_path / "exp_files"
     exp_dir.mkdir(parents=True, exist_ok=True)
     (exp_dir / "design_report.html").write_text("<html>design</html>", encoding="utf-8")
-    samples_dir = exp_dir / "samples"
-    samples_dir.mkdir()
-    (samples_dir / "control.csv").write_text("unit_id\nu1\nu2\n", encoding="utf-8")
 
     detail = app_client.get("/api/v1/experiments/exp_files").json()
     assert detail["available_reports"] == ["design_report.html"]
@@ -206,35 +203,85 @@ def test_experiment_reports_and_samples_from_artifact_dir(app_client, tmp_path, 
     report_resp = app_client.get("/api/v1/experiments/exp_files/reports/design_report.html")
     assert report_resp.status_code == 200
     assert "design" in report_resp.text
+    assert "attachment" not in report_resp.headers.get("content-disposition", "")
+
+    # 6-part package pt.9: ?download=1 swaps to a file attachment with a
+    # <experiment>_<report_name> filename, same content either way.
+    download_resp = app_client.get("/api/v1/experiments/exp_files/reports/design_report.html?download=1")
+    assert download_resp.status_code == 200
+    assert download_resp.text == report_resp.text
+    assert (
+        download_resp.headers["content-disposition"]
+        == 'attachment; filename="exp_files_design_report.html"'
+    )
 
     bad_report = app_client.get("/api/v1/experiments/exp_files/reports/report.html")
     assert bad_report.status_code == 404
 
-    samples_resp = app_client.get("/api/v1/experiments/exp_files/samples")
-    assert samples_resp.status_code == 200
-    samples = samples_resp.json()
-    assert len(samples) == 1
-    assert samples[0]["filename"] == "control.csv"
-    assert samples[0]["n_rows"] == 2
 
-    csv_resp = app_client.get("/api/v1/experiments/exp_files/samples/control.csv")
-    assert csv_resp.status_code == 200
-    assert "u1" in csv_resp.text
-
-    missing_csv = app_client.get("/api/v1/experiments/exp_files/samples/missing.csv")
-    assert missing_csv.status_code == 404
-
-    zip_resp = app_client.get("/api/v1/experiments/exp_files/samples.zip")
-    assert zip_resp.status_code == 200
-    assert zip_resp.headers["content-type"] == "application/zip"
-
-
-def test_experiment_samples_zip_404_when_no_samples(app_client, tmp_path, monkeypatch):
+def test_experiment_samples_zip_404_when_no_assignments(app_client, tmp_path, monkeypatch):
+    """6-part package pt.7: not_found is correct here — there really are no
+    assignments. The bug this replaces was 404-ing even when assignments
+    DID exist, because the old implementation looked for a samples/*.csv
+    directory on disk that ABKIT_MODE=db never writes (see
+    backend/routers/experiments.py::_load_group_assignments)."""
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _login(app_client)
     _make_experiment("exp_no_samples")
     resp = app_client.get("/api/v1/experiments/exp_no_samples/samples.zip")
     assert resp.status_code == 404
+
+
+def test_experiment_samples_generated_from_assignments_table(app_client, tmp_path, monkeypatch):
+    """6-part package pt.7 (bug fix): Download Samples must work off the
+    real assignments table, not a file-mode-era samples/ directory that
+    ABKIT_MODE=db never populates — regression coverage for the reported
+    not_found bug on an experiment that genuinely has a split."""
+    import pandas as pd
+
+    from abkit.db.repositories import AssignmentRepo
+
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    exp = _make_experiment("exp_real_split")
+    assignments = pd.DataFrame(
+        {
+            "unit_id": ["u1", "u2", "u3", "u4"],
+            "group": ["control", "control", "treatment", "treatment"],
+            "stratum": ["ios", "android", "ios", "android"],
+            "assigned_at": pd.Timestamp.now(tz="UTC"),
+        }
+    )
+    AssignmentRepo().bulk_insert(exp.id, assignments)
+
+    samples_resp = app_client.get("/api/v1/experiments/exp_real_split/samples")
+    assert samples_resp.status_code == 200
+    samples = {s["filename"]: s for s in samples_resp.json()}
+    assert set(samples) == {"control.csv", "treatment.csv"}
+    assert samples["control.csv"]["n_rows"] == 2
+    assert samples["treatment.csv"]["n_rows"] == 2
+
+    csv_resp = app_client.get("/api/v1/experiments/exp_real_split/samples/control.csv")
+    assert csv_resp.status_code == 200
+    assert csv_resp.headers["content-type"].startswith("text/csv")
+    lines = csv_resp.text.strip().splitlines()
+    assert lines[0] == "unit_id,group,stratum"
+    assert len(lines) == 3  # header + 2 control rows
+    assert "u1" in csv_resp.text and "u2" in csv_resp.text
+    assert "u3" not in csv_resp.text  # treatment unit must not leak into control.csv
+
+    missing_csv = app_client.get("/api/v1/experiments/exp_real_split/samples/missing.csv")
+    assert missing_csv.status_code == 404
+
+    zip_resp = app_client.get("/api/v1/experiments/exp_real_split/samples.zip")
+    assert zip_resp.status_code == 200
+    assert zip_resp.headers["content-type"] == "application/zip"
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+        assert set(zf.namelist()) == {"control.csv", "treatment.csv"}
+        assert zf.read("treatment.csv").decode("utf-8").count("\n") == 3  # header + 2 rows
 
 
 def test_get_results_404_then_returns_latest(app_client):

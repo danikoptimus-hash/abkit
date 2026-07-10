@@ -21,6 +21,19 @@ export interface CheckResult {
   passed: boolean
 }
 
+// 6-part package pt.10: per-stratum-per-group counts (a flat dict per
+// stratum — group names are dynamic keys alongside "stratum") plus the
+// column order and distinct stratum count, computed alongside the chi2
+// balance test (abkit/checks.py::strata_balance_rows/strata_balance_groups).
+export interface StrataBalanceResult extends CheckResult {
+  // Each row: { stratum: "<name>", "<group>": count, ... } — "stratum" is
+  // always a string, group columns are always counts; kept loose (not a
+  // strict intersection type) since the group keys are dynamic.
+  table: Array<Record<string, string | number>>
+  groups: string[]
+  n_strata: number
+}
+
 export interface PrePeriodAA {
   metric: string
   treatment_group: string
@@ -38,7 +51,7 @@ export interface ComputedDesignSummary {
   n_dropped_for_nan_strata: number
   power: Record<string, PowerResult>
   srm: CheckResult
-  strata_balance: CheckResult
+  strata_balance: StrataBalanceResult
   pre_period_aa: PrePeriodAA[]
   warnings: string[]
 }

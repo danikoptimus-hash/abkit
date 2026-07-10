@@ -672,6 +672,13 @@ class Experiment:
                         "chi2": balance_result.chi2,
                         "p_value": balance_result.p_value,
                         "passed": balance_result.passed,
+                        # 6-part package pt.10: per-stratum-per-group counts
+                        # (already computed for the chi2 test) — surfaced so
+                        # the Design tab can render a balance table, not just
+                        # the pass/fail badge.
+                        "table": checks.strata_balance_rows(balance_result),
+                        "groups": checks.strata_balance_groups(balance_result),
+                        "n_strata": len(balance_result.table.index),
                     },
                     "pre_period_aa": [
                         {

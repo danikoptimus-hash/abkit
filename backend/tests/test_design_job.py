@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from abkit.auth.passwords import hash_password
-from abkit.db.repositories import DatasetRepo, ExperimentRepo, UserRepo
+from abkit.db.repositories import AuditRepo, DatasetRepo, ExperimentRepo, UserRepo
 
 
 def _login(app_client, email="editor@co.com", role="editor"):
@@ -98,14 +98,13 @@ def test_design_happy_path_creates_experiment_and_attaches_dataset(app_client, t
     assert linked["experiment_name"] == "design_happy"
 
 
-def test_delete_experiment_unlinks_its_pre_design_dataset_file(app_client, tmp_path, monkeypatch):
-    """Regression (found via abkit-admin cleanup-dev's root-cause dig, CLAUDE.md
-    "Правило: гигиена dev-артефактов"): datasets.experiment_id is ON DELETE
-    CASCADE, so the DB row vanishes automatically when the experiment is
-    deleted — but cascade never touches the file on disk. run_delete_experiment
-    must unlink it explicitly BEFORE the cascade fires, or every experiment
-    delete leaks its pre_design dataset's parquet/csv into _uploads/ forever
-    (~900 such orphans had accumulated on the live dev stack before this fix)."""
+def test_delete_experiment_survives_its_pre_design_dataset(app_client, tmp_path, monkeypatch):
+    """6-part package pt.6 (CLAUDE.md "датасеты — самостоятельные сущности"):
+    datasets.experiment_id is ON DELETE SET NULL (migration 0012, was
+    CASCADE) — deleting an experiment must NOT delete the datasets it used,
+    only unlink them (and drop the experiment_datasets use-record, which
+    keeps its own CASCADE since it's a link, not the dataset itself). The
+    dataset row and its file on disk both survive."""
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _login(app_client)
     dataset_id = _upload_csv(app_client, _design_csv())
@@ -115,18 +114,35 @@ def test_delete_experiment_unlinks_its_pre_design_dataset_file(app_client, tmp_p
     assert storage_path.exists()
 
     resp = app_client.post(
-        "/api/v1/design", json={"config": _design_config("design_delete_unlink"), "dataset_id": dataset_id},
+        "/api/v1/design", json={"config": _design_config("design_delete_survives"), "dataset_id": dataset_id},
     )
     job = _poll_job(app_client, resp.json()["job_id"])
     assert job["status"] == "completed"
 
     delete_resp = app_client.request(
-        "DELETE", "/api/v1/experiments/design_delete_unlink", json={"confirm": "DELETE"},
+        "DELETE", "/api/v1/experiments/design_delete_survives", json={"confirm": "DELETE"},
     )
     assert delete_resp.status_code == 200, delete_resp.text
 
-    assert DatasetRepo().get_by_id(uuid.UUID(dataset_id)) is None
-    assert not storage_path.exists()
+    survived = DatasetRepo().get_by_id(uuid.UUID(dataset_id))
+    assert survived is not None
+    assert survived.experiment_id is None  # SET NULL unlinked it, didn't delete it
+    assert storage_path.exists()
+
+    # The dataset shows up on the Datasets page (independent of the deleted
+    # experiment) and is still usable — e.g. selectable for a new design.
+    datasets_resp = app_client.get("/api/v1/datasets")
+    assert any(d["id"] == dataset_id for d in datasets_resp.json()["items"])
+
+    # The experiment_datasets USE record (link, not the dataset) is gone —
+    # its own FK keeps CASCADE, unaffected by this migration.
+    from abkit.db.repositories import ExperimentDatasetRepo
+
+    assert ExperimentDatasetRepo().experiments_using_dataset(uuid.UUID(dataset_id)) == []
+
+    audit = AuditRepo().list_recent(limit=5, action="experiment.delete", object_name="design_delete_survives")
+    assert len(audit) == 1
+    assert audit[0].details["datasets"] == 1
 
 
 def test_design_isolation_warn_requires_confirmation_then_confirmed_continues(

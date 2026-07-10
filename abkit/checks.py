@@ -68,6 +68,26 @@ def check_strata_balance(
     )
 
 
+def strata_balance_rows(result: BalanceResult) -> list[dict]:
+    """JSON-safe per-stratum-per-group counts from check_strata_balance's
+    crosstab (6-part package pt.10: "таблица баланса страт по группам, если
+    ее нет в отчете — считается в проверках сплита, вывести") — the table
+    was already computed for the chi2 test, just never surfaced beyond the
+    single pass/fail badge. One flat dict per stratum: {"stratum": ...,
+    "<group>": count, ...}; used by both design_report.html and the
+    computed summary persisted for the Design tab."""
+    return [
+        {"stratum": str(idx), **{str(g): int(n) for g, n in row.items()}}
+        for idx, row in result.table.iterrows()
+    ]
+
+
+def strata_balance_groups(result: BalanceResult) -> list[str]:
+    """Column order for strata_balance_rows — kept separate since a flat
+    dict per row doesn't preserve group order on its own."""
+    return [str(g) for g in result.table.columns]
+
+
 @dataclass
 class AAResult:
     """Pre-period A/A тест по одной метрике между control и конкретной treatment-группой."""

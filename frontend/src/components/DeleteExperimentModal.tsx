@@ -8,9 +8,11 @@ interface Props {
   onDeleted: () => void
 }
 
-// Общая модалка удаления (FRONTEND.md §5.2): "Будут удалены: назначения (N),
-// датасеты (M), результаты (K)" — реальные числа из GET .../deletion-summary,
-// кнопка активна только при точном вводе "DELETE". Используется и списком
+// Общая модалка удаления (FRONTEND.md §5.2, текст обновлен 6-part пакетом
+// пт.6): реальные числа из GET .../deletion-summary — assignments/results
+// действительно удаляются, датасеты (M) только ОТВЯЗЫВАЮТСЯ (переживают
+// удаление эксперимента, CLAUDE.md "датасеты — самостоятельные сущности").
+// Кнопка активна только при точном вводе "DELETE". Используется и списком
 // экспериментов, и страницей теста.
 export function DeleteExperimentModal({ name, onCancel, onDeleted }: Props) {
   const [confirmText, setConfirmText] = useState('')
@@ -63,9 +65,9 @@ export function DeleteExperimentModal({ name, onCancel, onDeleted }: Props) {
       )}
       {summary ? (
         <Typography.Paragraph type="danger">
-          You are deleting experiment {name}. This will permanently delete: assignments (
-          {summary.assignments}), datasets ({summary.datasets}), analysis results ({summary.results}).
-          This action cannot be undone.
+          You are deleting experiment {name}, including its assignments ({summary.assignments} rows) and
+          analysis results ({summary.results}). Linked datasets ({summary.datasets}) will NOT be deleted — they
+          remain on the Datasets page. This action cannot be undone.
         </Typography.Paragraph>
       ) : (
         <Spin size="small" />

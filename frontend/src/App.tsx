@@ -43,7 +43,18 @@ function App() {
           }
         />
         <Route path="/datasets" element={<DatasetsPage />} />
-        <Route path="/validation" element={<ValidationPage />} />
+        {/* 6-part package pt.11: Validation moved into Settings > Tools;
+            the old top-level URL redirects so existing links/bookmarks
+            still work. */}
+        <Route path="/validation" element={<Navigate to="/settings/validation" replace />} />
+        <Route
+          path="/settings/validation"
+          element={
+            <RequireAuth minRole="editor">
+              <ValidationPage />
+            </RequireAuth>
+          }
+        />
         <Route path="/profile" element={<ProfilePage />} />
         <Route
           path="/admin"

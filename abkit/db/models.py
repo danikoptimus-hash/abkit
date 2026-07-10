@@ -152,8 +152,13 @@ class Dataset(Base):
     # создан (визард шаг 1, FRONTEND.md §3.2: "POST /datasets {..., experiment_id?}");
     # design-джоба привязывает его через DatasetRepo.attach_to_experiment()
     # после успешного создания эксперимента.
+    # ondelete="SET NULL" (миграция 0012, CLAUDE.md "датасеты — самостоятельные
+    # сущности"): датасеты живут независимо от экспериментов — удаление
+    # эксперимента не должно удалять сам датасет, только эту "primary"-ссылку
+    # (было CASCADE — баг, из-за которого удаление эксперимента стирало и его
+    # датасеты).
     experiment_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("experiments.id", ondelete="CASCADE"), nullable=True
+        UUID(as_uuid=True), ForeignKey("experiments.id", ondelete="SET NULL"), nullable=True
     )
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     filename: Mapped[str] = mapped_column(Text, nullable=False)

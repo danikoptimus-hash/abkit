@@ -29,3 +29,40 @@ test('validation page runs A/A + A/B and shows FPR and power tables', async ({ p
   await expect(page.getByText(/honest|lying/).first()).toBeVisible()
   await expect(page.getByText(/Validated with data\.csv/)).toBeVisible()
 })
+
+// 6-part package pt.11: Validation moved out of the main nav into
+// Settings > Tools — reachable at /settings/validation, gone from the top
+// menu, and the old /validation URL still redirects there (bookmarks keep
+// working).
+test('Validation is reachable from Settings > Tools, absent from the main nav, and /validation redirects', async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(60_000)
+  const name = `validation_settings_e2e_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+
+  await expect(page.getByRole('menuitem', { name: 'Validation' })).not.toBeVisible()
+
+  await page.getByTestId('user-menu-trigger').click()
+  await page.getByRole('menuitem', { name: 'Validation (A/A, A/B)' }).click()
+  await expect(page).toHaveURL(/\/settings\/validation$/)
+
+  await page.getByRole('combobox', { name: 'validation-experiment-select' }).click()
+  await page.getByRole('combobox', { name: 'validation-experiment-select' }).fill(name)
+  await page.getByTitle(name).click()
+  await expect(page.getByText('From experiment design')).toBeVisible()
+  await page.getByRole('spinbutton').first().fill('100')
+  await page.getByRole('button', { name: 'Run Validation' }).click()
+  await expect(page.getByText('A/A: empirical FPR')).toBeVisible({ timeout: 30_000 })
+
+  await page.goto('/validation')
+  await expect(page).toHaveURL(/\/settings\/validation$/)
+})
+
+test('viewer does not see Validation in Settings', async ({ page }) => {
+  await loginViaUi(page, 'viewer@e2e.test', 'e2epass123')
+  await page.getByTestId('user-menu-trigger').click()
+  await expect(page.getByRole('menuitem', { name: 'Validation (A/A, A/B)' })).not.toBeVisible()
+})

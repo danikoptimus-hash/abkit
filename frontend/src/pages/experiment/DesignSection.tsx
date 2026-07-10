@@ -1,5 +1,5 @@
 import { Typography, Table, Tag, Space, Button, Alert, Descriptions, Collapse, Spin, Tooltip } from 'antd'
-import { DownloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../../api/client'
 import { RelativeTime } from '../../components/RelativeTime'
@@ -72,8 +72,24 @@ function formatIsolation(config: Record<string, unknown>): string {
   return isolation ?? '—'
 }
 
-function ConfigSummary({ config }: { config: Record<string, unknown> }) {
+// 6-part package pt.10: explicit stratification fields — "Stratified by: X,
+// Y (N strata after combination, min stratum size: Z)" / "No
+// stratification" / "Hash-based split (salt stored)". n_strata comes from
+// computed.strata_balance (null for legacy/imported experiments with no
+// computed summary — the sentence still names the fields, just without the
+// after-combination count).
+function formatStratification(config: Record<string, unknown>, nStrata: number | null): string {
   const strata = (config.strata as string[] | undefined) ?? []
+  if (strata.length > 0) {
+    const minStratumSize = config.min_stratum_size as number | null | undefined
+    const suffix = nStrata != null ? ` (${nStrata} strata after combination, min stratum size: ${minStratumSize ?? '—'})` : ''
+    return `Stratified by: ${strata.join(', ')}${suffix}`
+  }
+  if (config.split_method === 'hash') return 'Hash-based split (salt stored)'
+  return 'No stratification'
+}
+
+function ConfigSummary({ config, computed }: { config: Record<string, unknown>; computed: ComputedDesignSummary | null }) {
   const metrics = (config.metrics as RawMetric[] | undefined) ?? []
   const seed = config.seed as number | null | undefined
 
@@ -86,9 +102,9 @@ function ConfigSummary({ config }: { config: Record<string, unknown> }) {
             {metrics.length ? metrics.map((m, i) => <div key={i}>{formatMetric(m)}</div>) : '—'}
           </Space>
         </Descriptions.Item>
-        <Descriptions.Item label="Split method">
-          {String(config.split_method ?? '—')}
-          {strata.length > 0 ? ` (strata: ${strata.join(', ')})` : ''}
+        <Descriptions.Item label="Split method">{String(config.split_method ?? '—')}</Descriptions.Item>
+        <Descriptions.Item label="Stratification">
+          {formatStratification(config, computed?.strata_balance.n_strata ?? null)}
         </Descriptions.Item>
         <Descriptions.Item label="Sample size mode">{formatSizeMode(config)}</Descriptions.Item>
         <Descriptions.Item label="Isolation">{formatIsolation(config)}</Descriptions.Item>
@@ -277,7 +293,7 @@ export function DesignSection({ name, config, availableReports }: Props) {
   return (
     <div>
       <Typography.Title level={5}>Configuration</Typography.Title>
-      <ConfigSummary config={config} />
+      <ConfigSummary config={config} computed={computed} />
 
       <DesignDataSection name={name} />
 
@@ -301,6 +317,33 @@ export function DesignSection({ name, config, availableReports }: Props) {
               detail={`p-value=${computed.strata_balance.p_value.toFixed(4)}`}
             />
           </Space>
+          {/* table/groups are absent on computed summaries persisted before
+              this field existed (older designed experiments) — optional
+              chaining so those don't crash, just skip the collapse. */}
+          {computed.strata_balance.table?.length > 0 && (
+            <Collapse
+              size="small"
+              style={{ marginBottom: 16 }}
+              items={[
+                {
+                  key: 'strata-balance-table',
+                  label: 'Strata balance table',
+                  children: (
+                    <Table
+                      size="small"
+                      dataSource={computed.strata_balance.table}
+                      rowKey="stratum"
+                      pagination={false}
+                      columns={[
+                        { title: 'Stratum', dataIndex: 'stratum' },
+                        ...(computed.strata_balance.groups ?? []).map((g) => ({ title: g, dataIndex: g })),
+                      ]}
+                    />
+                  ),
+                },
+              ]}
+            />
+          )}
           {computed.pre_period_aa.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               <Typography.Text strong>Pre-period A/A: </Typography.Text>
@@ -330,9 +373,17 @@ export function DesignSection({ name, config, availableReports }: Props) {
           Download Samples (ZIP)
         </Button>
         {availableReports.includes('design_report.html') && (
-          <Button icon={<DownloadOutlined />} href={`/api/v1/experiments/${name}/reports/design_report.html`} target="_blank">
-            design_report.html
-          </Button>
+          <>
+            <Button icon={<EyeOutlined />} href={`/api/v1/experiments/${name}/reports/design_report.html`} target="_blank">
+              View report
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              href={`/api/v1/experiments/${name}/reports/design_report.html?download=1`}
+            >
+              Download
+            </Button>
+          </>
         )}
       </Space>
     </div>
