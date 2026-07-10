@@ -152,3 +152,75 @@ test('create a database connection, test it, preview SQL, create a dataset, and 
 
   expect(pageErrors).toEqual([])
 })
+
+test('Edit dataset (source=sql) shows the schema/table cascade prefilled and both preview tabs, and "Preview query result" reflects unsaved SQL edits', async ({
+  page,
+}) => {
+  test.skip(!PG.host || !PG.password, 'E2E_POSTGRES_* not set — see .github/workflows/ci.yml')
+  test.setTimeout(60_000)
+
+  await loginViaUi(page)
+  await page.goto('/admin/db-connections')
+
+  const connectionName = `e2e_pg_edit_${Date.now()}`
+  await page.getByRole('button', { name: 'Database' }).click()
+  const connDialog = page.getByRole('dialog')
+  await connDialog.getByLabel('Host').fill(PG.host!)
+  await connDialog.getByLabel('Port').fill(PG.port!)
+  await connDialog.getByLabel('Database Name').fill(PG.db!)
+  await connDialog.getByLabel('Username').fill(PG.user!)
+  await connDialog.getByLabel('Password').fill(PG.password!)
+  await connDialog.getByLabel('Display Name').fill(connectionName)
+  await connDialog.getByRole('button', { name: 'Test connection' }).click()
+  await expect(connDialog.getByText('Connection successful')).toBeVisible({ timeout: 10_000 })
+  await connDialog.getByRole('button', { name: 'OK' }).click()
+  await expect(connDialog).not.toBeVisible()
+
+  // Create a sql dataset with a plain "FROM schema.table" query — simple
+  // enough for the Edit modal's prefill parser (UX package, Datasets §1.2).
+  await page.goto('/datasets')
+  await page.getByRole('button', { name: 'Dataset' }).click()
+  await page.getByRole('tab', { name: 'From SQL' }).click()
+  await page.getByRole('combobox', { name: 'from-sql-connection-select' }).click()
+  await page.getByTitle(new RegExp(connectionName)).click()
+  await page.getByPlaceholder('SELECT user_id, revenue FROM events WHERE ...').fill('SELECT id, email, role FROM public.users')
+  const datasetName = `e2e_sql_edit_${Date.now()}`
+  await page.getByPlaceholder('e.g. active_users_30d').fill(datasetName)
+  await page.getByRole('button', { name: 'Create dataset' }).click()
+  await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 20_000 })
+
+  const row = page.getByRole('row', { name: new RegExp(datasetName) })
+  await expect(row).toBeVisible()
+  await row.hover()
+  await row.getByRole('button', { name: 'Edit' }).click()
+
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Edit dataset' })
+  await expect(dialog).toBeVisible()
+
+  // §1.1/§1.2 — cascade present and prefilled by parsing the saved query.
+  await expect(dialog.getByRole('combobox', { name: 'from-sql-schema-select' })).toBeVisible()
+  await expect(dialog.getByRole('combobox', { name: 'from-sql-table-select' })).toBeVisible()
+  await expect(dialog.getByTitle('public')).toBeVisible()
+  await expect(dialog.getByTitle('users', { exact: true })).toBeVisible()
+
+  // §2.1/§2.2 — Data preview is expanded by default with both tabs.
+  await expect(dialog.getByText('Data preview')).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: 'Stored snapshot' })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: 'Query result' })).toBeVisible()
+  await expect(dialog.getByText(/Stored snapshot: \d+ rows, fetched/)).toBeVisible()
+  await expect(dialog.getByRole('columnheader', { name: 'email' })).toBeVisible({ timeout: 10_000 })
+
+  // Edit the SQL box (not saved yet) and preview it via the "Query result"
+  // tab — must reflect this in-editor change, not the stored snapshot.
+  const sqlBox = dialog.locator('textarea')
+  await sqlBox.fill('SELECT 1 AS probe_col FROM public.users LIMIT 1')
+  await dialog.getByRole('tab', { name: 'Query result' }).click()
+  await dialog.getByRole('button', { name: 'Preview query result' }).click()
+  await expect(dialog.getByRole('columnheader', { name: 'probe_col' })).toBeVisible({ timeout: 10_000 })
+
+  // The stored-snapshot tab still shows the ORIGINAL columns, unaffected.
+  await dialog.getByRole('tab', { name: 'Stored snapshot' }).click()
+  await expect(dialog.getByRole('columnheader', { name: 'email' })).toBeVisible()
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+})

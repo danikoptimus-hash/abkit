@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
-import { Modal, Typography, Input, Select, Button, Alert, Progress, Space } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { Modal, Typography, Input, Select, Button, Alert, Progress, Space, Collapse, Tabs } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../../api/client'
 import { useJobPolling } from '../../api/useJobPolling'
 import type { components } from '../../api/schema'
+import { SchemaTableCascade } from '../../components/datasets/SchemaTableCascade'
+import { QueryResultPreview } from '../../components/datasets/QueryResultPreview'
+import { DatasetSnapshotPreview } from '../../components/datasets/DatasetSnapshotPreview'
+import { parseSchemaTableFromSql } from '../../components/datasets/parseSchemaTableFromSql'
 
 type DatasetOut = components['schemas']['DatasetOut']
 
@@ -11,10 +15,11 @@ const { TextArea } = Input
 
 // UX package, Datasets §2.3: opens the same shape of form as creation, with
 // fields pre-filled. source=upload/demo only has `name` editable (the file
-// itself can't change); source=sql also allows connection/SQL, which
-// re-fetches (same mechanism as Refresh) on save — with a warning naming
-// how many experiments reference this dataset, since that re-fetch replaces
-// the stored snapshot those experiments' "current data" points at.
+// itself can't change); source=sql also allows connection/SQL/schema-table
+// picker, which re-fetches (same mechanism as Refresh) on save — with a
+// warning naming how many experiments reference this dataset, since that
+// re-fetch replaces the stored snapshot those experiments' "current data"
+// points at.
 export function EditDatasetModal({
   dataset, open, onClose,
 }: {
@@ -25,6 +30,8 @@ export function EditDatasetModal({
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [connectionId, setConnectionId] = useState<string | undefined>(undefined)
+  const [schema, setSchema] = useState<string | undefined>(undefined)
+  const [table, setTable] = useState<string | undefined>(undefined)
   const [sql, setSql] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -32,11 +39,20 @@ export function EditDatasetModal({
 
   const isSql = dataset?.source === 'sql'
 
+  // Unlike Create, the editor here always opens holding the *saved* query —
+  // which counts as a manual edit from the start — so picking a table
+  // confirms before replacing it instead of silently filling an empty box.
+  const lastAutoFilledSql = useRef<string | null>(null)
+
   useEffect(() => {
     if (dataset) {
       setName(dataset.filename)
       setConnectionId(dataset.connection_id ?? undefined)
       setSql(dataset.sql_text ?? '')
+      const parsed = dataset.source === 'sql' ? parseSchemaTableFromSql(dataset.sql_text ?? '') : {}
+      setSchema(parsed.schema)
+      setTable(parsed.table)
+      lastAutoFilledSql.current = null
       setError(null)
       reset()
     }
@@ -67,6 +83,26 @@ export function EditDatasetModal({
   if (!dataset) return null
 
   const sqlChanged = isSql && (connectionId !== (dataset.connection_id ?? undefined) || sql !== (dataset.sql_text ?? ''))
+
+  const handleTableChange = (value: string | undefined) => {
+    setTable(value)
+    if (!value || !schema) return
+    const generated = `SELECT * FROM "${schema}"."${value}"`
+    if (sql.trim() === '' || sql === lastAutoFilledSql.current) {
+      setSql(generated)
+      lastAutoFilledSql.current = generated
+      return
+    }
+    Modal.confirm({
+      title: 'Replace SQL query?',
+      content: 'This will discard your manual edits in the SQL box and replace it with a SELECT * against the chosen table.',
+      okText: 'Replace',
+      onOk: () => {
+        setSql(generated)
+        lastAutoFilledSql.current = generated
+      },
+    })
+  }
 
   const doSave = async () => {
     setSaving(true)
@@ -141,6 +177,15 @@ export function EditDatasetModal({
             onChange={setConnectionId}
             options={(connections ?? []).map((c) => ({ value: c.id, label: `${c.display_name} (${c.engine})` }))}
           />
+
+          <SchemaTableCascade
+            connectionId={connectionId}
+            schema={schema}
+            table={table}
+            onSchemaChange={setSchema}
+            onTableChange={handleTableChange}
+          />
+
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
             SQL (SELECT only)
           </Typography.Text>
@@ -156,6 +201,38 @@ export function EditDatasetModal({
           To change data, upload a new dataset.
         </Typography.Paragraph>
       )}
+
+      <Collapse
+        defaultActiveKey={['preview']}
+        style={{ marginBottom: 12 }}
+        items={[
+          {
+            key: 'preview',
+            label: 'Data preview',
+            children: isSql ? (
+              <Tabs
+                size="small"
+                items={[
+                  {
+                    key: 'snapshot',
+                    label: 'Stored snapshot',
+                    children: (
+                      <DatasetSnapshotPreview datasetId={dataset.id} nRows={dataset.n_rows} fetchedAt={dataset.fetched_at ?? null} />
+                    ),
+                  },
+                  {
+                    key: 'query',
+                    label: 'Query result',
+                    children: <QueryResultPreview connectionId={connectionId} sql={sql} buttonLabel="Preview query result" />,
+                  },
+                ]}
+              />
+            ) : (
+              <DatasetSnapshotPreview datasetId={dataset.id} nRows={dataset.n_rows} fetchedAt={dataset.fetched_at ?? null} />
+            ),
+          },
+        ]}
+      />
 
       {running && (
         <div style={{ marginBottom: 12 }}>

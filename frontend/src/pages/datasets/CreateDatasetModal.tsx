@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react'
-import { Modal, Tabs, Upload, Button, Alert, Select, Input, Table, Progress, Typography, Spin, Space, Tooltip } from 'antd'
-import { InboxOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Modal, Tabs, Upload, Button, Alert, Select, Input, Progress, Typography, Spin } from 'antd'
+import { InboxOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UploadProps } from 'antd'
 import { apiClient, errorMessage, toFormData } from '../../api/client'
 import { useJobPolling } from '../../api/useJobPolling'
+import { SchemaTableCascade } from '../../components/datasets/SchemaTableCascade'
+import { QueryResultPreview } from '../../components/datasets/QueryResultPreview'
 
 const { Dragger } = Upload
 const { TextArea } = Input
@@ -65,9 +67,7 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
   const [table, setTable] = useState<string | undefined>(undefined)
   const [sql, setSql] = useState('')
   const [name, setName] = useState('')
-  const [previewing, setPreviewing] = useState(false)
-  const [previewError, setPreviewError] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const { phase, stage, error, poll, reset } = useJobPolling<{ dataset_id: string; n_rows: number; truncated: boolean }>()
 
@@ -79,57 +79,13 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
     },
   })
 
-  // Schema/Table pickers (UX package, Datasets п.1) — optional, purely a
+  // Schema/Table cascade (UX package, Datasets §1) — optional, purely a
   // convenience for filling in the SQL box. "SQL is the source of truth" —
   // selecting a table only overwrites `sql` when it's still exactly what a
   // previous selection generated (or empty); once the user edits it by
-  // hand, further schema/table changes stop clobbering their edits.
+  // hand, further schema/table changes silently stop clobbering their edits
+  // (unlike Edit, which confirms instead — see EditDatasetModal).
   const lastAutoFilledSql = useRef<string | null>(null)
-  const forceRefreshSchemas = useRef(false)
-  const forceRefreshTables = useRef(false)
-
-  const {
-    data: schemas, isFetching: schemasLoading, refetch: refetchSchemas,
-  } = useQuery({
-    queryKey: ['db-connection-schemas', connectionId],
-    enabled: !!connectionId,
-    queryFn: async () => {
-      const refresh = forceRefreshSchemas.current
-      forceRefreshSchemas.current = false
-      const { data, error } = await apiClient.GET('/api/v1/db-connections/{conn_id}/schemas', {
-        params: { path: { conn_id: connectionId! }, query: { refresh } },
-      })
-      if (error) throw new Error(errorMessage(error))
-      return data.schemas
-    },
-  })
-
-  const {
-    data: tables, isFetching: tablesLoading, refetch: refetchTables,
-  } = useQuery({
-    queryKey: ['db-connection-tables', connectionId, schema],
-    enabled: !!connectionId && !!schema,
-    queryFn: async () => {
-      const refresh = forceRefreshTables.current
-      forceRefreshTables.current = false
-      const { data, error } = await apiClient.GET('/api/v1/db-connections/{conn_id}/schemas/{schema}/tables', {
-        params: { path: { conn_id: connectionId!, schema: schema! }, query: { refresh } },
-      })
-      if (error) throw new Error(errorMessage(error))
-      return data.tables
-    },
-  })
-
-  const handleConnectionChange = (value: string) => {
-    setConnectionId(value)
-    setSchema(undefined)
-    setTable(undefined)
-  }
-
-  const handleSchemaChange = (value: string | undefined) => {
-    setSchema(value)
-    setTable(undefined)
-  }
 
   const handleTableChange = (value: string | undefined) => {
     setTable(value)
@@ -142,25 +98,6 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
     }
   }
 
-  const runPreview = async () => {
-    if (!connectionId || !sql.trim()) return
-    setPreviewing(true)
-    setPreviewError(null)
-    setPreview(null)
-    try {
-      const { data, error } = await apiClient.POST('/api/v1/db-connections/{conn_id}/preview', {
-        params: { path: { conn_id: connectionId } },
-        body: { sql },
-      })
-      if (error) throw new Error(errorMessage(error))
-      setPreview({ columns: data.columns, rows: data.rows })
-    } catch (e) {
-      setPreviewError(e instanceof Error ? e.message : 'Preview failed')
-    } finally {
-      setPreviewing(false)
-    }
-  }
-
   const runCreate = async () => {
     if (!connectionId || !sql.trim() || !name.trim()) return
     reset()
@@ -169,7 +106,7 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
       body: { connection_id: connectionId, sql, name, kind: 'pre_design' },
     })
     if (error) {
-      setPreviewError(errorMessage(error))
+      setCreateError(errorMessage(error))
       return
     }
     const result = await poll(data.job_id)
@@ -190,58 +127,20 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
         placeholder={connectionsLoading ? 'Loading...' : 'Select a database connection'}
         loading={connectionsLoading}
         value={connectionId}
-        onChange={handleConnectionChange}
+        onChange={setConnectionId}
         options={(connections ?? []).map((c) => ({ value: c.id, label: `${c.display_name} (${c.engine})` }))}
         notFoundContent={
           connectionsLoading ? undefined : 'No database connections configured — ask an admin to add one in Settings'
         }
       />
 
-      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-        Schema &amp; table <Typography.Text type="secondary" style={{ fontSize: 12 }}>(optional — fills in the SQL box below)</Typography.Text>
-      </Typography.Text>
-      <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
-        <Select
-          style={{ width: '45%' }}
-          aria-label="from-sql-schema-select"
-          showSearch
-          allowClear
-          disabled={!connectionId}
-          loading={schemasLoading}
-          placeholder="Schema"
-          value={schema}
-          onChange={handleSchemaChange}
-          options={(schemas ?? []).map((s) => ({ value: s, label: s }))}
-        />
-        <Select
-          style={{ width: '45%' }}
-          aria-label="from-sql-table-select"
-          showSearch
-          allowClear
-          disabled={!schema}
-          loading={tablesLoading}
-          placeholder="Table"
-          value={table}
-          onChange={handleTableChange}
-          options={(tables ?? []).map((t) => ({ value: t, label: t }))}
-        />
-        <Tooltip title="Refresh schema/table list">
-          <Button
-            style={{ width: '10%' }}
-            icon={<ReloadOutlined />}
-            disabled={!connectionId}
-            onClick={() => {
-              if (schema) {
-                forceRefreshTables.current = true
-                refetchTables()
-              } else {
-                forceRefreshSchemas.current = true
-                refetchSchemas()
-              }
-            }}
-          />
-        </Tooltip>
-      </Space.Compact>
+      <SchemaTableCascade
+        connectionId={connectionId}
+        schema={schema}
+        table={table}
+        onSchemaChange={setSchema}
+        onTableChange={handleTableChange}
+      />
 
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
         SQL (SELECT only)
@@ -254,23 +153,7 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
         style={{ marginBottom: 12, fontFamily: 'monospace' }}
       />
 
-      <Button onClick={runPreview} loading={previewing} disabled={!connectionId || !sql.trim()} style={{ marginBottom: 12 }}>
-        Preview
-      </Button>
-
-      {previewError && <Alert type="error" message={previewError} showIcon style={{ marginBottom: 12 }} closable onClose={() => setPreviewError(null)} />}
-
-      {preview && (
-        <Table
-          size="small"
-          dataSource={preview.rows}
-          rowKey={(_, i) => String(i)}
-          pagination={false}
-          scroll={{ x: true, y: 240 }}
-          style={{ marginBottom: 12 }}
-          columns={preview.columns.map((c) => ({ title: c, dataIndex: c }))}
-        />
-      )}
+      <QueryResultPreview connectionId={connectionId} sql={sql} />
 
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
         Dataset name
@@ -283,6 +166,7 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
           <Typography.Text>{stage ?? 'Starting...'}</Typography.Text>
         </div>
       )}
+      {createError && <Alert type="error" showIcon message={createError} style={{ marginBottom: 12 }} closable onClose={() => setCreateError(null)} />}
       {phase === 'failed' && error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
 
       <Button type="primary" onClick={runCreate} disabled={!canCreate} loading={running}>

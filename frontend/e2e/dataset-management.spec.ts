@@ -19,6 +19,13 @@ test('Edit dataset renames it, upload source only exposes the name field', async
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText('To change data, upload a new dataset.')).toBeVisible()
 
+  // §2.3 — upload source still gets a read-only snapshot preview (useful
+  // when renaming), just no connection/SQL/schema-table controls.
+  await expect(dialog.getByText('Data preview')).toBeVisible()
+  await expect(dialog.getByText(/Stored snapshot: \d+ rows, fetched/)).toBeVisible()
+  await expect(dialog.getByRole('columnheader', { name: 'a' })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: 'Query result' })).not.toBeVisible()
+
   const nameInput = dialog.getByRole('textbox')
   const newName = `edited_${Date.now()}.csv`
   await nameInput.fill(newName)
