@@ -20,6 +20,10 @@ export function AdminPage() {
   const [modalUser, setModalUser] = useState<UserAdminOut | 'new' | null>(null)
   const [form] = Form.useForm<UserFormValues>()
   const [saving, setSaving] = useState(false)
+  // Deactivated accounts (e.g. e2e/dev test users cleaned up per CLAUDE.md's
+  // "_dev_ prefix + self-cleanup" rule) shouldn't clutter the list by
+  // default — opt in with "Show inactive" instead.
+  const [showInactive, setShowInactive] = useState(false)
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['admin-users'],
@@ -109,15 +113,19 @@ export function AdminPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           Users
         </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Create User
-        </Button>
+        <Space>
+          <Switch checked={showInactive} onChange={setShowInactive} aria-label="Show inactive" />
+          <Typography.Text>Show inactive</Typography.Text>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            Create User
+          </Button>
+        </Space>
       </Space>
 
       <Table
         rowKey="id"
         loading={isLoading}
-        dataSource={users ?? []}
+        dataSource={(users ?? []).filter((u) => showInactive || u.is_active)}
         columns={[
           { title: 'Email', dataIndex: 'email' },
           { title: 'First Name', dataIndex: 'first_name' },

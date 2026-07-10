@@ -73,6 +73,10 @@ test('create a database connection, test it, preview SQL, create a dataset, and 
   // exact: the dataset's own filename contains "sql" as a substring too
   // (e2e_sql_dataset_...), and getByText matches case-insensitively.
   await expect(row.getByText('SQL', { exact: true })).toBeVisible()
+  // Refresh icon present for source=sql (UX package, Datasets п.1.1a/1.5) —
+  // hover-reveal like the rest of the app's row actions.
+  await row.hover()
+  await expect(row.getByRole('button', { name: 'Refresh' })).toBeVisible()
 
   // Preview drawer explains the snapshot semantics (UX package, Datasets
   // п.4.1) — deleting the source table doesn't touch the stored dataset.
@@ -80,15 +84,38 @@ test('create a database connection, test it, preview SQL, create a dataset, and 
   await expect(page.getByText(/Snapshot stored in ABKit/)).toBeVisible()
   await page.keyboard.press('Escape')
 
+  // Change the SQL's source table (a real, live change — insert a new user
+  // via the admin API) before refreshing, then confirm Refresh actually
+  // re-fetches: n_rows must reflect the new row count, not just show a
+  // generic success toast (UX package, Datasets п.1.5).
+  const datasetsBefore = await page.request.get('/api/v1/datasets?page_size=200')
+  const beforeEntry = (await datasetsBefore.json()).items.find((d: { filename: string }) =>
+    d.filename.startsWith(datasetName),
+  )
+  expect(beforeEntry).toBeTruthy()
+
+  const newUserEmail = `e2e_refresh_probe_${Date.now()}@e2e.test`
+  const createUserResp = await page.request.post('/api/v1/admin/users', {
+    data: { email: newUserEmail, first_name: 'Refresh', last_name: 'Probe', role: 'viewer' },
+  })
+  expect(createUserResp.ok()).toBeTruthy()
+
   // Refresh re-runs the SQL against the live connection — requires
   // confirming a Modal first, doesn't fire immediately on click (UX
-  // package, Datasets п.4.2).
+  // package, Datasets п.1.3).
+  await row.hover()
   await row.getByRole('button', { name: 'Refresh' }).click()
   const confirmDialog = page.getByRole('dialog').filter({ hasText: 'Refresh dataset from source?' })
   await expect(confirmDialog).toBeVisible()
   await expect(confirmDialog.getByText(/replace the stored snapshot/)).toBeVisible()
   await confirmDialog.getByRole('button', { name: 'Refresh' }).click()
   await expect(page.getByText(/Refreshed:/)).toBeVisible({ timeout: 15_000 })
+
+  const datasetsAfter = await page.request.get('/api/v1/datasets?page_size=200')
+  const afterEntry = (await datasetsAfter.json()).items.find((d: { filename: string }) =>
+    d.filename.startsWith(datasetName),
+  )
+  expect(afterEntry.n_rows).toBe(beforeEntry.n_rows + 1)
 
   // Design an experiment picking this dataset — proves it round-trips
   // through the exact same path a file upload would (DB3).

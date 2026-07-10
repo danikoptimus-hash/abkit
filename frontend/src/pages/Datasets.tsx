@@ -1,17 +1,21 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Table, Drawer, Table as PreviewTable, Typography, Button, Space, message, Modal, Alert } from 'antd'
+import { Table, Drawer, Table as PreviewTable, Typography, Button, Space, message, Modal, Alert, Tooltip } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
 import { RelativeTime } from '../components/RelativeTime'
 import { SourceTag } from '../components/DatasetSelect'
 import { CreateDatasetModal } from './datasets/CreateDatasetModal'
+import { useAuth, hasMinRole } from '../auth/AuthContext'
 import type { components } from '../api/schema'
 
 type DatasetOut = components['schemas']['DatasetOut']
 
-function RefreshButton({ dataset }: { dataset: DatasetOut }) {
+// Shared by the table row's icon action and the preview drawer's labeled
+// button (UX-package, Datasets п.1.1a/1.1b) — same confirm+run+poll flow,
+// different presentation.
+function useRefreshDataset(datasetId: string) {
   const queryClient = useQueryClient()
   const [refreshing, setRefreshing] = useState(false)
 
@@ -19,7 +23,7 @@ function RefreshButton({ dataset }: { dataset: DatasetOut }) {
     setRefreshing(true)
     try {
       const { data, error } = await apiClient.POST('/api/v1/datasets/{dataset_id}/refresh', {
-        params: { path: { dataset_id: dataset.id } },
+        params: { path: { dataset_id: datasetId } },
       })
       if (error) throw new Error(errorMessage(error))
       const deadline = Date.now() + 30_000
@@ -36,9 +40,9 @@ function RefreshButton({ dataset }: { dataset: DatasetOut }) {
         queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
         // The drawer's preview rows/columns (a separate query, keyed by
         // dataset id) also need to reflect the fresh data — UX package,
-        // Datasets п.4.2: "обновленные fetched_at и структура колонок
+        // Datasets п.1.3: "обновленные fetched_at и структура колонок
         // видны в drawer" after Refresh.
-        queryClient.invalidateQueries({ queryKey: ['dataset-preview', dataset.id] })
+        queryClient.invalidateQueries({ queryKey: ['dataset-preview', datasetId] })
       } else {
         message.error(job?.error ?? 'Refresh failed')
       }
@@ -49,8 +53,7 @@ function RefreshButton({ dataset }: { dataset: DatasetOut }) {
     }
   }
 
-  const confirmRefresh = (e: React.MouseEvent) => {
-    e.stopPropagation() // don't also trigger the row's preview-drawer click
+  const confirmRefresh = () => {
     Modal.confirm({
       title: 'Refresh dataset from source?',
       content:
@@ -60,9 +63,36 @@ function RefreshButton({ dataset }: { dataset: DatasetOut }) {
     })
   }
 
+  return { refreshing, confirmRefresh }
+}
+
+// Datasets table's Actions column, source=sql only — hover-reveal icon like
+// the rest of the app's row actions (ExperimentsList).
+function RefreshRowAction({ dataset }: { dataset: DatasetOut }) {
+  const { refreshing, confirmRefresh } = useRefreshDataset(dataset.id)
+  return (
+    <Tooltip title="Re-fetch data from source">
+      <Button
+        className="hover-actions"
+        size="small"
+        aria-label="Refresh"
+        icon={<ReloadOutlined />}
+        loading={refreshing}
+        onClick={(e) => {
+          e.stopPropagation() // don't also trigger the row's preview-drawer click
+          confirmRefresh()
+        }}
+      />
+    </Tooltip>
+  )
+}
+
+// Preview drawer's labeled button, next to the source info.
+function RefreshDrawerButton({ dataset }: { dataset: DatasetOut }) {
+  const { refreshing, confirmRefresh } = useRefreshDataset(dataset.id)
   return (
     <Button size="small" icon={<ReloadOutlined />} loading={refreshing} onClick={confirmRefresh}>
-      Refresh
+      Refresh from source
     </Button>
   )
 }
@@ -97,6 +127,8 @@ export function DatasetsPage() {
   })
 
   const previewedDataset = data?.items.find((d) => d.id === previewId)
+  const { user } = useAuth()
+  const canRefresh = hasMinRole(user, 'editor')
 
   return (
     <div>
@@ -126,7 +158,8 @@ export function DatasetsPage() {
           {
             title: 'Actions',
             key: 'actions',
-            render: (_, record: DatasetOut) => (record.source === 'sql' ? <RefreshButton dataset={record} /> : null),
+            render: (_, record: DatasetOut) =>
+              record.source === 'sql' && canRefresh ? <RefreshRowAction dataset={record} /> : null,
           },
         ]}
       />
@@ -148,13 +181,16 @@ export function DatasetsPage() {
               message="Snapshot stored in ABKit. Deleting the source table in the external database does NOT affect this dataset. Use Refresh to re-fetch current data (columns are updated automatically)."
             />
             <Space style={{ marginBottom: 4, justifyContent: 'space-between', width: '100%' }}>
-              <Typography.Text strong>SQL</Typography.Text>
-              {previewedDataset.fetched_at && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Last fetched <RelativeTime iso={previewedDataset.fetched_at} />
-                  {previewedDataset.connection_name ? ` from ${previewedDataset.connection_name}` : ''}
-                </Typography.Text>
-              )}
+              <Space align="center">
+                <Typography.Text strong>SQL</Typography.Text>
+                {previewedDataset.fetched_at && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Last fetched <RelativeTime iso={previewedDataset.fetched_at} />
+                    {previewedDataset.connection_name ? ` from ${previewedDataset.connection_name}` : ''}
+                  </Typography.Text>
+                )}
+              </Space>
+              {canRefresh && <RefreshDrawerButton dataset={previewedDataset} />}
             </Space>
             <Typography.Paragraph
               code

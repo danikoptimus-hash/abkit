@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 
 Engine = Literal["postgresql", "clickhouse", "mssql"]
+
+# Root cause of a real "Test connection fails on host=postgres" bug: a
+# trailing space typed/pasted into the Host field (or database/username)
+# turns a perfectly valid value into an unresolvable one ("postgres " is not
+# "postgres") — DNS resolution correctly fails on the space-padded string,
+# but the resulting "dns_error" reads as a false positive since the host
+# LOOKS right. Strip whitespace at the schema boundary so it can never reach
+# the connection layer at all, for any of the three write paths (create,
+# patch, test-draft). Never applied to `password` — a password's leading/
+# trailing whitespace can be intentional and must round-trip byte-for-byte.
+TrimmedStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class DatabaseConnectionOut(BaseModel):
@@ -25,24 +36,24 @@ class DatabaseConnectionOut(BaseModel):
 
 
 class CreateDatabaseConnectionRequest(BaseModel):
-    display_name: str
+    display_name: TrimmedStr
     engine: Engine
-    host: str
+    host: TrimmedStr
     port: int
-    database: str
-    username: str
+    database: TrimmedStr
+    username: TrimmedStr
     password: str
     extra_params: dict[str, Any] | None = None
     ssl: bool = False
 
 
 class PatchDatabaseConnectionRequest(BaseModel):
-    display_name: str | None = None
+    display_name: TrimmedStr | None = None
     engine: Engine | None = None
-    host: str | None = None
+    host: TrimmedStr | None = None
     port: int | None = None
-    database: str | None = None
-    username: str | None = None
+    database: TrimmedStr | None = None
+    username: TrimmedStr | None = None
     # None == "unchanged" (UI placeholder) — omit or send null to keep the
     # existing encrypted password; send a non-empty string to replace it.
     password: str | None = None
@@ -51,16 +62,16 @@ class PatchDatabaseConnectionRequest(BaseModel):
 
 
 class TestConnectionResult(BaseModel):
-    outcome: Literal["ok", "host_unreachable", "auth_failed", "db_not_found", "error"]
+    outcome: Literal["ok", "dns_error", "tcp_timeout", "auth_failed", "db_not_found", "error"]
     message: str
 
 
 class TestDraftConnectionRequest(BaseModel):
     engine: Engine
-    host: str
+    host: TrimmedStr
     port: int
-    database: str
-    username: str
+    database: TrimmedStr
+    username: TrimmedStr
     password: str
     extra_params: dict[str, Any] | None = None
     ssl: bool = False

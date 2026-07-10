@@ -265,6 +265,42 @@ def test_run_validate_aa_editor_allowed(users):
     assert len(report.methods) > 0
 
 
+# --------------------------------------------------------------------------
+# run_delete_dataset — admin-only maintenance helper (no delete button in the
+# UI; used for cleaning up orphaned dev/test datasets, see CLAUDE.md's
+# "_dev_ prefix + self-cleanup" rule).
+# --------------------------------------------------------------------------
+
+
+def test_run_delete_dataset_editor_blocked(users, tmp_path):
+    from abkit.db.repositories import DatasetRepo
+
+    f = tmp_path / "orphan.csv"
+    f.write_text("a,b\n1,2\n")
+    ds_id = DatasetRepo().create(
+        kind="pre_design", filename="orphan.csv", n_rows=1, columns=["a", "b"],
+        storage_path=str(f), sha256="x", uploaded_by=uuid.UUID(users["editor"].id),
+    )
+    with pytest.raises(AuthError):
+        jobs.run_delete_dataset(users["editor"], str(ds_id))
+    assert DatasetRepo().get_by_id(ds_id) is not None
+    assert f.exists()
+
+
+def test_run_delete_dataset_admin_allowed_removes_row_and_file(users, tmp_path):
+    from abkit.db.repositories import DatasetRepo
+
+    f = tmp_path / "orphan2.csv"
+    f.write_text("a,b\n1,2\n")
+    ds_id = DatasetRepo().create(
+        kind="pre_design", filename="orphan2.csv", n_rows=1, columns=["a", "b"],
+        storage_path=str(f), sha256="x", uploaded_by=uuid.UUID(users["editor"].id),
+    )
+    jobs.run_delete_dataset(users["admin"], str(ds_id))
+    assert DatasetRepo().get_by_id(ds_id) is None
+    assert not f.exists()
+
+
 def test_ids_are_real_uuids_not_placeholder_strings(users):
     """Sanity: owner_id используемый в тестах — настоящий UUID пользователя, а
     не служебный системный юзер (иначе тесты выше молчаливо проверяли бы не то)."""

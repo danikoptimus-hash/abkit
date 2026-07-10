@@ -6,6 +6,7 @@ same testcontainers-postgres this test session already runs against."""
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from sqlalchemy import text as sa_text
 from sqlalchemy.engine import make_url
@@ -203,6 +204,57 @@ def test_refresh_sql_dataset(app_client, db_url, tmp_path, monkeypatch):
     entry = next(d for d in ds["items"] if d["id"] == dataset_id)
     assert entry["n_rows"] == 80
     assert entry["fetched_at"] is not None
+
+
+def test_refresh_leaves_old_snapshot_untouched_on_mid_fetch_failure(app_client, db_url, tmp_path, monkeypatch):
+    """UX-package, Datasets п.1.4: a source error (dropped connection,
+    table gone) during refresh must not corrupt the existing snapshot —
+    execute_select_to_parquet fetches into a temp file that's only swapped
+    in on success (abkit/jobs.py::run_refresh_sql_dataset)."""
+    import abkit.db_connections.sql_dataset as sql_dataset_module
+
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _seed_table(db_url, n=50)
+    _login(app_client, role="admin")
+    conn_id = _create_connection(app_client, db_url)
+
+    resp = app_client.post(
+        "/api/v1/datasets/from-sql",
+        json={
+            "connection_id": conn_id, "sql": "SELECT user_id, revenue FROM from_sql_probe",
+            "name": "refresh_failure", "kind": "post_analysis",
+        },
+    )
+    job = _poll_job(app_client, resp.json()["job_id"])
+    dataset_id = job["result"]["dataset_id"]
+
+    ds_before = app_client.get("/api/v1/datasets").json()
+    entry_before = next(d for d in ds_before["items"] if d["id"] == dataset_id)
+    # storage_path isn't in the API response — resolve it from disk instead:
+    # the from-sql upload dir has exactly one file for this fresh dataset.
+    uploads_dir = Path(tmp_path) / "_uploads"
+    original_files = list(uploads_dir.glob("*refresh_failure.parquet"))
+    assert len(original_files) == 1
+    original_path = original_files[0]
+    original_bytes = original_path.read_bytes()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("source unreachable mid-fetch")
+
+    monkeypatch.setattr(sql_dataset_module, "execute_select_to_parquet", _boom)
+
+    refresh_resp = app_client.post(f"/api/v1/datasets/{dataset_id}/refresh")
+    assert refresh_resp.status_code == 202
+    refresh_job = _poll_job(app_client, refresh_resp.json()["job_id"])
+    assert refresh_job["status"] == "failed"
+
+    assert original_path.read_bytes() == original_bytes
+    # no stray temp file left behind either
+    assert list(uploads_dir.glob(".refresh_*")) == []
+
+    ds_after = app_client.get("/api/v1/datasets").json()
+    entry_after = next(d for d in ds_after["items"] if d["id"] == dataset_id)
+    assert entry_after["n_rows"] == entry_before["n_rows"]
 
 
 def test_refresh_rejects_non_sql_dataset(app_client, db_url, tmp_path, monkeypatch):

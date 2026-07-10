@@ -119,7 +119,11 @@ def test_patch_without_password_keeps_existing_password(app_client, db_url):
     assert decrypt_password(conn.password_encrypted) == "keep-me"
 
 
-def test_test_connection_against_unreachable_host(app_client, db_url):
+def test_test_connection_against_unresolvable_host_is_dns_error(app_client, db_url):
+    """A hostname that can never resolve — dns_error, distinct from
+    tcp_timeout (host resolves fine but nothing answers on the port). These
+    used to be one merged "host_unreachable" category; split so the message
+    actually points at the right field to fix (Host vs. Port/network)."""
     _login(app_client)
     created = app_client.post(
         "/api/v1/admin/db-connections",
@@ -127,14 +131,34 @@ def test_test_connection_against_unreachable_host(app_client, db_url):
     ).json()
     resp = app_client.post(f"/api/v1/admin/db-connections/{created['id']}/test")
     assert resp.status_code == 200
-    assert resp.json()["outcome"] == "host_unreachable"
+    assert resp.json()["outcome"] == "dns_error"
+
+
+def test_test_connection_against_closed_port_is_tcp_timeout(app_client, db_url):
+    """Host resolves (it's the same host testcontainers-postgres runs on),
+    but nothing listens on port 1 — connection refused, classified as
+    tcp_timeout, not dns_error."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(db_url)
+    _login(app_client)
+    created = app_client.post(
+        "/api/v1/admin/db-connections",
+        json=_pg_body(host=url.host, port=1),
+    ).json()
+    resp = app_client.post(f"/api/v1/admin/db-connections/{created['id']}/test")
+    assert resp.status_code == 200
+    assert resp.json()["outcome"] == "tcp_timeout"
 
 
 def test_test_draft_connection_against_real_testcontainers_postgres(app_client, db_url):
     """Real end-to-end SELECT 1 against the same testcontainers-postgres
     instance this test session is already using — proves the whole chain
     (URL building, driver, timeout, SELECT 1) actually works, not just that
-    errors are classified correctly."""
+    errors are classified correctly. This is the permanent smoke test for
+    the feature: a well-formed connection to a real, reachable Postgres
+    must report "ok" — the same round trip the Playwright e2e test exercises
+    against the docker-compose stack's own postgres (database-connections.spec.ts)."""
     from sqlalchemy.engine import make_url
 
     url = make_url(db_url)
@@ -149,6 +173,40 @@ def test_test_draft_connection_against_real_testcontainers_postgres(app_client, 
     )
     assert resp.status_code == 200
     assert resp.json() == {"outcome": "ok", "message": "Connection successful"}
+
+
+def test_test_draft_connection_trims_whitespace_in_host_and_database(app_client, db_url):
+    """Root cause of a real bug: a trailing space typed/pasted into Host
+    (e.g. "postgres ") turns a valid hostname into an unresolvable one —
+    DNS correctly fails on the space-padded string, but the failure reads as
+    a false positive since the host *looks* right. host/database/username
+    are trimmed at the schema boundary (backend/schemas/db_connections.py's
+    TrimmedStr) so this can never reach the connection layer."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(db_url)
+    _login(app_client)
+    resp = app_client.post(
+        "/api/v1/admin/db-connections/test-draft",
+        json={
+            "engine": "postgresql", "host": f"  {url.host}  ", "port": url.port,
+            "database": f" {url.database} ", "username": f" {url.username} ", "password": url.password,
+            "ssl": False,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"outcome": "ok", "message": "Connection successful"}
+
+
+def test_create_connection_trims_whitespace_and_rejects_blank_host(app_client, db_url):
+    _login(app_client)
+    resp = app_client.post("/api/v1/admin/db-connections", json=_pg_body(host="  localhost  "))
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert created["host"] == "localhost"
+
+    blank_resp = app_client.post("/api/v1/admin/db-connections", json=_pg_body(host="   "))
+    assert blank_resp.status_code == 422
 
 
 def test_test_draft_connection_wrong_password_is_auth_failed(app_client, db_url):

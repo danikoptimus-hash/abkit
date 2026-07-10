@@ -18,5 +18,7 @@ test('admin sees "Create A/B Test" and can open /admin', async ({ page }) => {
 
   await page.goto('/admin')
   await expect(page).toHaveURL(/\/admin$/)
-  await expect(page.getByText('Users')).toBeVisible()
+  // heading role: a plain text match can collide with row data containing
+  // "Users" as a substring (e.g. a last name like "UsersE2E").
+  await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible()
 })

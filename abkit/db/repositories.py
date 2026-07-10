@@ -84,8 +84,12 @@ class UserRepo:
             return user
 
     def list_all(self) -> list[User]:
+        # created_at desc: same reasoning as DatabaseConnectionRepo.list_all()
+        # — a freshly created/modified user must be visible on the Admin
+        # Users list's first page (default AntD Table page size 10) without
+        # hunting through pagination.
         with session_scope() as s:
-            users = list(s.scalars(select(User).order_by(User.created_at)))
+            users = list(s.scalars(select(User).order_by(User.created_at.desc())))
             for u in users:
                 s.expunge(u)
             return users
@@ -459,6 +463,19 @@ class DatasetRepo:
             if ds is not None:
                 s.expunge(ds)
             return ds
+
+    def delete(self, dataset_id: uuid_mod.UUID) -> None:
+        """Реальное удаление строки — сейчас нужно только для админской
+        уборки орфанных датасетов (не привязанных ни к одному эксперименту
+        ни через legacy experiment_id, ни через experiment_datasets), не
+        вызывается из обычного UI-флоу (у датасета нет кнопки удаления —
+        см. CLAUDE.md, датасет-центричная модель). Файл на диске (storage_path)
+        удаляет вызывающая сторона."""
+        with session_scope() as s:
+            ds = s.get(Dataset, dataset_id)
+            if ds is None:
+                raise RepoError(f"Dataset {dataset_id} not found")
+            s.delete(ds)
 
     def attach_to_experiment(self, dataset_id: uuid_mod.UUID, experiment_id: uuid_mod.UUID) -> None:
         """Привязывает pre_design датасет (загружен до создания эксперимента,

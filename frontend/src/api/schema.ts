@@ -1569,7 +1569,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "ok" | "host_unreachable" | "auth_failed" | "db_not_found" | "error";
+            outcome: "ok" | "dns_error" | "tcp_timeout" | "auth_failed" | "db_not_found" | "error";
             /** Message */
             message: string;
         };

@@ -23,6 +23,10 @@ test('"+ Dataset" modal uploads a file and it appears in the list with an Upload
   const row = page.getByRole('row', { name: new RegExp(filename) })
   await expect(row).toBeVisible()
   await expect(row.getByText('Upload')).toBeVisible()
+
+  // Refresh only makes sense for source=sql — an uploaded file has nothing
+  // to re-fetch from (UX package, Datasets п.1.2: absent, not disabled).
+  await expect(row.getByRole('button', { name: 'Refresh' })).toHaveCount(0)
 })
 
 test('From SQL tab renders a connection picker and SQL editor', async ({ page }) => {

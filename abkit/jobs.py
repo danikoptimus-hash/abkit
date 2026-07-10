@@ -255,6 +255,33 @@ def run_delete_experiment(current_user: CurrentUser, name: str) -> None:
     )
 
 
+def run_delete_dataset(current_user: CurrentUser, dataset_id: str) -> None:
+    """Admin-only maintenance helper — datasets have no delete button in the
+    UI (dataset-centric model, CLAUDE.md: a dataset is meant to be a durable,
+    reusable artifact), this exists only for cleaning up orphaned datasets
+    (not linked to any experiment via the legacy experiment_id or via
+    experiment_datasets) via the same DELETE-through-service-functions
+    discipline as run_delete_experiment, not raw SQL."""
+    require_role(current_user, "admin")
+    from pathlib import Path
+
+    from abkit import storage
+    from abkit.db.repositories import DatasetRepo
+
+    ds = DatasetRepo().get_by_id(uuid_mod.UUID(dataset_id))
+    if ds is None:
+        raise storage.StorageError(f"Dataset '{dataset_id}' not found")
+
+    with _timed("delete_dataset", user=current_user.email, dataset=ds.filename):
+        DatasetRepo().delete(ds.id)
+        path = Path(ds.storage_path)
+        if path.exists():
+            path.unlink()
+    _audit(
+        current_user, "dataset.delete", object_type="dataset", object_id=str(ds.id), object_name=ds.filename,
+    )
+
+
 def run_update_experiment_properties(
     current_user: CurrentUser,
     name: str,
@@ -382,9 +409,14 @@ def run_refresh_sql_dataset(
     current_user: CurrentUser, dataset_id: str, progress_callback: Any = None,
 ) -> dict[str, Any]:
     """POST /datasets/{id}/refresh (DB2) — re-runs the dataset's stored
-    sql_text against its connection, overwriting the parquet in place.
-    Editor+ (same right as creating a dataset)."""
+    sql_text against its connection. Editor+ (same right as creating a
+    dataset). Fetches into a fresh temp file first and only swaps it into
+    the live storage_path once the fetch fully succeeds — a mid-stream
+    failure (connection dropped, source table gone partway through) must
+    leave the existing snapshot untouched (UX package, Datasets п.1.4), not
+    a truncated/partial parquet from writing in place."""
     require_role(current_user, "editor")
+    import uuid as _uuid
     from pathlib import Path
 
     from abkit import storage
@@ -405,10 +437,18 @@ def run_refresh_sql_dataset(
         if progress_callback is not None:
             progress_callback(f"Fetched {n_rows} rows...")
 
+    live_path = Path(ds.storage_path)
+    tmp_path = live_path.with_name(f".refresh_{_uuid.uuid4().hex}_{live_path.name}")
+
     with _timed("refresh_sql_dataset", user=current_user.email, dataset=ds.filename):
-        result = execute_select_to_parquet(
-            _connection_spec(conn_row), ds.sql_text, Path(ds.storage_path), progress_callback=_progress
-        )
+        try:
+            result = execute_select_to_parquet(
+                _connection_spec(conn_row), ds.sql_text, tmp_path, progress_callback=_progress
+            )
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        tmp_path.replace(live_path)
         sha256 = DatasetRepo.compute_sha256_from_file(ds.storage_path)
         DatasetRepo().update_after_refresh(ds.id, n_rows=result.n_rows, columns=result.columns, sha256=sha256)
     _audit(
