@@ -108,3 +108,50 @@ export function nextId(prefix: string): string {
   idCounter += 1
   return `${prefix}${idCounter}`
 }
+
+export function groupsFromApi(groups: Record<string, number>): GroupFormRow[] {
+  return Object.entries(groups).map(([name, prop]) => ({ id: nextId('group'), name, prop }))
+}
+
+export function metricsFromApi(metrics: MetricConfig[]): MetricFormRow[] {
+  return metrics.map((m) => ({
+    id: nextId('metric'),
+    name: m.name,
+    type: m.type as MetricFormRow['type'],
+    role: m.role as MetricFormRow['role'],
+    preCol: m.pre_col ?? null,
+    num: m.num ?? null,
+    den: m.den ?? null,
+  }))
+}
+
+// Redesign (5-part package pt.3.2): "the wizard opens PRE-FILLED with the
+// current config" — the inverse of buildDesignConfig, sourced from a real
+// saved DesignConfig instead of the demo-data suggested_config (see
+// Step1Data.tsx's handleDemoData for the precedent this mirrors). Dataset
+// fields (datasetId/columns/dtypes/previewRows/nRows) aren't part of
+// DesignConfig — the caller fetches and merges those separately.
+export function wizardStateFromConfig(config: DesignConfig): Partial<WizardState> {
+  const metrics = metricsFromApi(config.metrics)
+  const mdeSourceMetric = metrics.find((m) => m.name === config.mde_source_metric)
+  let sizeMode: SizeMode = 'all'
+  if (config.mde_abs_input != null) sizeMode = 'mde_abs'
+  else if (config.mde != null) sizeMode = 'mde_rel'
+  else if (config.sample_size != null) sizeMode = 'sample_size'
+  return {
+    name: config.name,
+    unitCol: config.unit_col,
+    groups: groupsFromApi(config.groups),
+    metrics,
+    strata: config.strata ?? [],
+    nanStrategy: config.nan_strategy ?? 'separate_stratum',
+    sizeMode,
+    mdeRel: config.mde ?? 0.05,
+    mdeAbsMetricId: mdeSourceMetric?.id ?? null,
+    mdeAbsValue: config.mde_abs_input ?? 0,
+    sampleSize: config.sample_size ?? 1000,
+    splitMethod: config.split_method,
+    isolation: config.isolation,
+    isolationSelected: config.isolation_selected_experiments ?? [],
+  }
+}

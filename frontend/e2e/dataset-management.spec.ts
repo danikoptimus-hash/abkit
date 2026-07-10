@@ -36,7 +36,7 @@ test('Edit dataset renames it, upload source only exposes the name field', async
   await expect(page.getByRole('row', { name: new RegExp(originalName) })).not.toBeVisible()
 })
 
-test('Delete an unused dataset asks for a plain confirmation', async ({ page, request }) => {
+test('Delete an unused dataset requires typed DELETE; canceling does not delete it', async ({ page, request }) => {
   const filename = `delete_unused_${Date.now()}.csv`
   await uploadDataset(request, 'a,b\n1,2\n', filename)
   await loginViaUi(page)
@@ -48,9 +48,21 @@ test('Delete an unused dataset asks for a plain confirmation', async ({ page, re
 
   const confirmDialog = page.getByRole('dialog').filter({ hasText: `Delete dataset ${filename}?` })
   await expect(confirmDialog).toBeVisible()
-  await expect(confirmDialog.getByText('This cannot be undone.')).toBeVisible()
-  // The plain confirm doesn't require typing anything.
-  await confirmDialog.getByRole('button', { name: 'Delete' }).click()
+  await expect(confirmDialog.getByText(/Type DELETE to confirm/)).toBeVisible()
+  const okButton = confirmDialog.getByRole('button', { name: 'Delete' })
+  await expect(okButton).toBeDisabled()
+
+  // Canceling does not delete it.
+  await confirmDialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(confirmDialog).not.toBeVisible()
+  await expect(page.getByRole('row', { name: new RegExp(filename) })).toBeVisible()
+
+  await row.hover()
+  await row.getByRole('button', { name: 'Delete' }).click()
+  await expect(confirmDialog).toBeVisible()
+  await confirmDialog.getByPlaceholder('DELETE').fill('DELETE')
+  await expect(okButton).toBeEnabled()
+  await okButton.click()
 
   await expect(page.getByRole('row', { name: new RegExp(filename) })).not.toBeVisible()
 })

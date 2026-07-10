@@ -58,3 +58,17 @@ def test_holm_never_decreases_relative_order_below_bonferroni_first():
     p_values = [0.01, 0.02, 0.03]
     ours = mt.holm(p_values)
     assert ours[0] == pytest.approx(0.03)
+
+
+def test_adjust_p_values_none_is_passthrough(p_values):
+    # 5-part package pt.5: single-hypothesis families use correction="none",
+    # equivalent to any correction with m=1 — raw p-values unchanged.
+    assert mt.adjust_p_values(p_values, method="none") == pytest.approx(p_values)
+
+
+def test_adjust_p_values_fdr_bh_matches_bh(p_values):
+    # Frontend option value is "fdr_bh" (Benjamini-Hochberg) — must alias to
+    # the same implementation as "bh", not raise.
+    assert mt.adjust_p_values(p_values, method="fdr_bh") == pytest.approx(
+        mt.adjust_p_values(p_values, method="bh")
+    )

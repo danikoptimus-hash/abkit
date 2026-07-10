@@ -68,6 +68,19 @@ def test_design_report_written_and_has_all_sections(tmp_path):
     assert experiment.name in html
 
 
+def test_design_report_has_absolute_mde_columns(tmp_path):
+    """5-part package pt.2: MDE (abs.) / MDE (abs., CUPED) columns, binary
+    metrics in percentage points, continuous in raw units."""
+    experiment = _demo_design(tmp_path)
+    html = (experiment.path / "design_report.html").read_text(encoding="utf-8")
+    assert "MDE (abs.)" in html
+    assert "MDE (abs., CUPED)" in html
+    assert "abs = rel &#215; baseline" in html or "abs = rel × baseline" in html
+    # revenue is continuous (raw units, no "pp" suffix); clicks is binary
+    # (percentage points).
+    assert "pp</td>" in html
+
+
 def test_design_report_opens_offline_no_external_deps(tmp_path):
     experiment = _demo_design(tmp_path)
     html = (experiment.path / "design_report.html").read_text(encoding="utf-8")

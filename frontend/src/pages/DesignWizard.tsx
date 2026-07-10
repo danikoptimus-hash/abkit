@@ -1,11 +1,13 @@
-import { useState } from 'react'
-import { Steps, Button, Space, Input, Select, Alert } from 'antd'
+import { useEffect, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { Steps, Button, Space, Input, Select, Alert, Spin, Tooltip } from 'antd'
+import { apiClient, errorMessage } from '../api/client'
 import { Step1Data } from './design-wizard/Step1Data'
 import { Step2GroupsMetrics } from './design-wizard/Step2GroupsMetrics'
 import { Step3Parameters } from './design-wizard/Step3Parameters'
 import { Step4Review } from './design-wizard/Step4Review'
-import { nextId, groupsSum } from './design-wizard/types'
-import type { WizardState } from './design-wizard/types'
+import { nextId, groupsSum, wizardStateFromConfig } from './design-wizard/types'
+import type { WizardState, DesignConfig } from './design-wizard/types'
 
 const INITIAL_STATE: WizardState = {
   datasetId: null,
@@ -45,14 +47,79 @@ function stepError(step: number, state: WizardState): string | null {
   return null
 }
 
+function inferDtypes(previewRows: Record<string, unknown>[]): Record<string, string> {
+  const dtypes: Record<string, string> = {}
+  for (const [key, value] of Object.entries(previewRows[0] ?? {})) {
+    dtypes[key] = typeof value === 'number' ? 'float64' : 'object'
+  }
+  return dtypes
+}
+
+// Redesign (5-part package pt.3.2): reached via /experiments/:name/redesign
+// (route param below), loads the experiment's current config + its design
+// dataset and pre-fills the wizard state before the user ever sees step 1 —
+// "all steps editable, including the dataset."
+function useRedesignPrefill(redesignName: string | undefined, setState: (updater: (prev: WizardState) => WizardState) => void) {
+  const [loading, setLoading] = useState(!!redesignName)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!redesignName) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const { data: exp, error: expError } = await apiClient.GET('/api/v1/experiments/{name}', {
+          params: { path: { name: redesignName } },
+        })
+        if (expError) throw new Error(errorMessage(expError))
+        const { data: dsInfo, error: dsError } = await apiClient.GET('/api/v1/experiments/{name}/design-dataset', {
+          params: { path: { name: redesignName } },
+        })
+        if (dsError || !dsInfo) throw new Error('No design dataset found for this experiment — cannot redesign')
+        const { data: preview } = await apiClient.GET('/api/v1/datasets/{dataset_id}/preview', {
+          params: { path: { dataset_id: dsInfo.id }, query: { rows: 20 } },
+        })
+        const previewRows = preview?.rows ?? []
+        if (cancelled) return
+        setState((prev) => ({
+          ...prev,
+          datasetId: dsInfo.id,
+          columns: dsInfo.columns,
+          dtypes: inferDtypes(previewRows),
+          nRows: dsInfo.n_rows,
+          previewRows,
+          ...wizardStateFromConfig(exp.config as unknown as DesignConfig),
+        }))
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load experiment for redesign')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [redesignName, setState])
+
+  return { loading, error }
+}
+
 // Визард дизайна A/B теста (FRONTEND.md §5.2, 4 шага). Состояние — один
 // объект конфига (WizardState), поднятый в этом компоненте и передаваемый
-// шагам как props.
+// шагам как props. Also serves redesign (5-part package pt.3) at
+// /experiments/:name/redesign — same steps, pre-filled state, name locked,
+// and Step4Review submits to a different endpoint (see redesignName prop).
 export function DesignWizardPage() {
+  const { name: redesignName } = useParams<{ name?: string }>()
   const [current, setCurrent] = useState(0)
   const [state, setState] = useState<WizardState>(INITIAL_STATE)
+  const { loading: redesignLoading, error: redesignError } = useRedesignPrefill(redesignName, setState)
 
   const error = stepError(current, state)
+
+  if (redesignLoading) return <Spin size="large" />
+  if (redesignError) return <Alert type="error" showIcon message={redesignError} />
 
   return (
     <div>
@@ -62,14 +129,27 @@ export function DesignWizardPage() {
         style={{ marginBottom: 32, maxWidth: 800 }}
       />
 
+      {redesignName && (
+        <Alert
+          type="info"
+          showIcon
+          message={`Redesigning "${redesignName}"`}
+          description="The current split, MDE table, and split checks will be discarded once you submit; analyses run against the old split will be deleted."
+          style={{ marginBottom: 24, maxWidth: 600 }}
+        />
+      )}
+
       {current === 1 && (
         <Space style={{ marginBottom: 24 }}>
-          <Input
-            placeholder="Experiment name"
-            value={state.name}
-            style={{ width: 260 }}
-            onChange={(e) => setState((prev) => ({ ...prev, name: e.target.value }))}
-          />
+          <Tooltip title={redesignName ? 'Renaming is not part of redesign — use Edit Properties afterwards' : ''}>
+            <Input
+              placeholder="Experiment name"
+              value={state.name}
+              style={{ width: 260 }}
+              disabled={!!redesignName}
+              onChange={(e) => setState((prev) => ({ ...prev, name: e.target.value }))}
+            />
+          </Tooltip>
           <Select
             placeholder="Unit column (unit_col)"
             style={{ width: 220 }}
@@ -84,7 +164,7 @@ export function DesignWizardPage() {
         {current === 0 && <Step1Data state={state} setState={setState} />}
         {current === 1 && <Step2GroupsMetrics state={state} setState={setState} />}
         {current === 2 && <Step3Parameters state={state} setState={setState} />}
-        {current === 3 && <Step4Review state={state} />}
+        {current === 3 && <Step4Review state={state} redesignName={redesignName} />}
       </div>
 
       {current < 3 && (

@@ -105,23 +105,25 @@ function RefreshDrawerButton({ dataset }: { dataset: DatasetOut }) {
   )
 }
 
-// UX package, Datasets §2.2: checks usage first (GET .../usage), THEN shows
-// one of two Modals — a plain confirm for an unused dataset, or a strict
-// one listing the referencing experiments and requiring the exact text
-// "DELETE" typed in, for a used one. The backend independently re-enforces
-// this (defense in depth — see abkit/jobs.py::run_delete_dataset), so a
-// stale usage check here can't bypass it, just show the wrong Modal once.
+// UX package, Datasets §2.2, strengthened (5-part package pt.1): checks usage
+// first (GET .../usage), then ALWAYS shows the same strict typed-DELETE
+// Modal — the icons for Edit/Delete sit close together in the Actions
+// column, so a plain confirm on unused datasets was too easy to trigger by
+// accident. Used datasets additionally show the referencing-experiments
+// list. The backend independently re-enforces this (defense in depth — see
+// abkit/jobs.py::run_delete_dataset), so a stale usage check here can't
+// bypass it.
 function DeleteDatasetAction({ dataset, onDeleted }: { dataset: DatasetOut; onDeleted: () => void }) {
   const [deleting, setDeleting] = useState(false)
   const [confirmModal, setConfirmModal] = useState<{ experiments: string[] } | null>(null)
   const [typedConfirm, setTypedConfirm] = useState('')
 
-  const doDelete = async (confirm?: string) => {
+  const doDelete = async () => {
     setDeleting(true)
     try {
       const { error } = await apiClient.DELETE('/api/v1/datasets/{dataset_id}', {
         params: { path: { dataset_id: dataset.id } },
-        body: confirm ? { confirm } : {},
+        body: { confirm: 'DELETE' },
       })
       if (error) throw new Error(errorMessage(error))
       message.success(`Deleted ${dataset.filename}`)
@@ -142,22 +144,11 @@ function DeleteDatasetAction({ dataset, onDeleted }: { dataset: DatasetOut; onDe
         params: { path: { dataset_id: dataset.id } },
       })
       if (error) throw new Error(errorMessage(error))
-      if (data.experiments.length === 0) {
-        setDeleting(false)
-        Modal.confirm({
-          title: `Delete dataset ${dataset.filename}?`,
-          content: 'This cannot be undone.',
-          okText: 'Delete',
-          okButtonProps: { danger: true },
-          onOk: () => doDelete(),
-        })
-      } else {
-        setDeleting(false)
-        setConfirmModal({ experiments: data.experiments })
-      }
+      setConfirmModal({ experiments: data.experiments })
     } catch (e) {
-      setDeleting(false)
       message.error(e instanceof Error ? e.message : 'Failed to check dataset usage')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -180,22 +171,30 @@ function DeleteDatasetAction({ dataset, onDeleted }: { dataset: DatasetOut; onDe
       <Modal
         title={`Delete dataset ${dataset.filename}?`}
         open={confirmModal !== null}
-        onCancel={() => {
+        // Modal renders via a React portal, but click events still bubble
+        // through the REACT tree (not the DOM tree) to the table row's
+        // onClick — without stopPropagation, clicking Cancel/OK here also
+        // "clicks" the row underneath and opens its preview drawer.
+        onCancel={(e) => {
+          e.stopPropagation()
           setConfirmModal(null)
           setTypedConfirm('')
         }}
-        onOk={() => doDelete('DELETE')}
+        onOk={(e) => {
+          e.stopPropagation()
+          doDelete()
+        }}
         okText="Delete"
         okButtonProps={{ danger: true, disabled: typedConfirm !== 'DELETE', loading: deleting }}
         destroyOnHidden
       >
-        <Typography.Paragraph>
-          Used by experiments: <strong>{confirmModal?.experiments.join(', ')}</strong>. Deleting this dataset
-          will not affect their existing analysis results, but their data source will show as deleted.
-        </Typography.Paragraph>
-        <Typography.Paragraph>
-          Type <Typography.Text code>DELETE</Typography.Text> to confirm.
-        </Typography.Paragraph>
+        {confirmModal && confirmModal.experiments.length > 0 && (
+          <Typography.Paragraph>
+            Used by experiments: <strong>{confirmModal.experiments.join(', ')}</strong>. Deleting this dataset
+            will not affect their existing analysis results, but their data source will show as deleted.
+          </Typography.Paragraph>
+        )}
+        <Typography.Paragraph>This cannot be undone. Type <Typography.Text code>DELETE</Typography.Text> to confirm.</Typography.Paragraph>
         <Input value={typedConfirm} onChange={(e) => setTypedConfirm(e.target.value)} placeholder="DELETE" />
       </Modal>
     </>

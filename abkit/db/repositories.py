@@ -254,6 +254,18 @@ class ExperimentRepo:
                 raise RepoError(f"Experiment '{name}' not found")
             exp.visible_roles = visible_roles
 
+    def update_config(self, name: str, config: dict[str, Any]) -> None:
+        """In-place redesign (5-part package pt.3) — replaces the stored
+        DesignConfig (with fresh .computed) on the SAME row/id, unlike
+        create() which always inserts a new one. Status/owner/created_at
+        are untouched here; callers (abkit/jobs.py::run_redesign) already
+        verified status=='designed' before calling this."""
+        with session_scope() as s:
+            exp = s.scalar(select(Experiment).where(Experiment.name == name))
+            if exp is None:
+                raise RepoError(f"Experiment '{name}' not found")
+            exp.config = config
+
     def rename(self, name: str, new_name: str) -> None:
         with session_scope() as s:
             exp = s.scalar(select(Experiment).where(Experiment.name == name))
@@ -366,6 +378,16 @@ class AssignmentRepo:
                 )
                 or 0
             )
+
+    def delete_for_experiment(self, experiment_id: uuid_mod.UUID) -> None:
+        """In-place redesign (5-part package pt.3) — drops the OLD split
+        before the new one is inserted, same experiment row. Unlike
+        ExperimentRepo.delete()'s cascade, this does not touch the
+        experiment row itself."""
+        with session_scope() as s:
+            s.query(Assignment).filter(
+                Assignment.experiment_id == experiment_id
+            ).delete(synchronize_session=False)
 
     def occupied_units_for_active_experiments(
         self, exclude_experiment_ids: set[uuid_mod.UUID] | None = None
@@ -663,6 +685,17 @@ class ResultRepo:
                 )
                 or 0
             )
+
+    def delete_for_experiment(self, experiment_id: uuid_mod.UUID) -> None:
+        """In-place redesign (5-part package pt.3.3) — analyses run against
+        the OLD split are misleading once assignments have changed, so they
+        are dropped rather than kept dangling. Unlike deleting the
+        experiment itself, this does not cascade — it's a direct, targeted
+        delete."""
+        with session_scope() as s:
+            s.query(AnalysisResult).filter(
+                AnalysisResult.experiment_id == experiment_id
+            ).delete(synchronize_session=False)
 
 
 class AuditRepo:

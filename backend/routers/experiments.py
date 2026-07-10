@@ -27,7 +27,7 @@ from backend.errors import APIError
 from backend.jobs.runner import JobRunner
 from backend.schemas.blocks import BlockIn, BlockOut
 from backend.schemas.datasets import DatasetOut
-from backend.schemas.design import JobAccepted
+from backend.schemas.design import DesignRequest, JobAccepted
 from backend.schemas.experiments import (
     REPORT_FILENAMES,
     AnalyzeDemoRequest,
@@ -592,6 +592,53 @@ def _save_analysis(
         name, json.dumps(payload, ensure_ascii=False), report_path,
         dataset_id=dataset_id, dataset_filename=dataset_filename, created_by=created_by,
     )
+
+
+@router.post("/{name}/redesign", response_model=JobAccepted, status_code=202)
+def start_redesign(
+    name: str, body: DesignRequest,
+    user: CurrentUser = Depends(require_min_role("editor")),
+    runner: JobRunner = Depends(get_job_runner),
+) -> JobAccepted:
+    """Redesign (5-part package pt.3) — replaces the split/config of an
+    EXISTING experiment in place, instead of POST /design's always-create.
+    Gated the same as other experiment mutations (owner/access-editor/admin,
+    require_experiment_edit_access — checked again inside run_redesign as
+    defense in depth) and only while status=='designed' (pt.3.4)."""
+    from abkit.access import require_experiment_edit_access
+
+    exp = _get_experiment_or_404(name)
+    require_experiment_edit_access(user, exp)
+    if exp.status != "designed":
+        raise APIError(400, "invalid_status", "Only experiments in 'designed' status can be redesigned")
+    if body.config.name != name:
+        raise APIError(422, "validation_error", "Redesign cannot rename the experiment")
+
+    try:
+        dataset_uuid = uuid_mod.UUID(body.dataset_id)
+    except ValueError as e:
+        raise APIError(422, "validation_error", "Invalid dataset id") from e
+    dataset = DatasetRepo().get_by_id(dataset_uuid)
+    if dataset is None:
+        raise APIError(404, "not_found", f"Dataset '{body.dataset_id}' not found")
+
+    config = body.config
+    confirmed = body.confirmed
+    data = read_dataset_file(dataset.storage_path, dtype={config.unit_col: str})
+
+    def _run(reporter) -> dict[str, Any]:
+        from abkit.db.repositories import ExperimentDatasetRepo
+        from abkit.jobs import run_redesign
+        from backend.routers.design import _check_isolation_overlap
+
+        _check_isolation_overlap(config, data, confirmed)
+        experiment = run_redesign(user, config, data, progress_callback=reporter.stage)
+        exp_row = ExperimentRepo().get_by_name(experiment.name)
+        ExperimentDatasetRepo().link(exp_row.id, dataset.id, kind="pre_design")
+        return {"experiment_name": experiment.name}
+
+    job = runner.submit("redesign", uuid_mod.UUID(user.id), _run)
+    return JobAccepted(job_id=str(job.id))
 
 
 @router.post("/{name}/analyze", response_model=JobAccepted, status_code=202)

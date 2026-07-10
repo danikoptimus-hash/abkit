@@ -95,6 +95,47 @@ def run_design(
     return experiment
 
 
+def run_redesign(
+    current_user: CurrentUser, config: DesignConfig, data: pd.DataFrame, **kwargs: Any
+) -> Experiment:
+    """Redesign (5-part package pt.3) — owner/access-editor/admin only (a
+    stricter gate than run_design's "any editor", since this mutates an
+    EXISTING experiment rather than creating a new one — same policy as
+    run_update_status/run_rename_experiment). Only while status=='designed'
+    (pt.3.4): once running, the old split has already produced observations
+    that a new split would silently invalidate — archive + new experiment
+    is the only path from there. Replaces assignments/config in place (same
+    row, config.name is the target) and drops analysis_results run against
+    the discarded split (pt.3.3) — they describe a randomization that no
+    longer exists."""
+    from abkit.db.repositories import ResultRepo
+
+    exp_row = _get_experiment_row(config.name)
+    require_experiment_edit_access(current_user, exp_row)
+    if exp_row.status != "designed":
+        raise AuthError("Only experiments in 'designed' status can be redesigned")
+
+    old_config = exp_row.config
+    deleted_results = ResultRepo().count_for_experiment(exp_row.id)
+
+    with _timed("redesign", user=current_user.email, experiment=config.name, n_rows=len(data)):
+        experiment = Experiment.design(
+            config, data, owner_id=current_user.id, is_redesign=True, **kwargs
+        )
+        ResultRepo().delete_for_experiment(exp_row.id)
+
+    _audit(
+        current_user, "experiment.redesign",
+        object_type="experiment", object_id=str(exp_row.id), object_name=config.name,
+        details={
+            "config_before": old_config,
+            "config_after": config.model_dump(mode="json"),
+            "deleted_analysis_results": deleted_results,
+        },
+    )
+    return experiment
+
+
 def run_analyze(
     current_user: CurrentUser, experiment: Experiment, data: pd.DataFrame, **kwargs: Any
 ) -> AnalysisResults:

@@ -417,6 +417,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/experiments/{name}/redesign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Redesign
+         * @description Redesign (5-part package pt.3) — replaces the split/config of an
+         *     EXISTING experiment in place, instead of POST /design's always-create.
+         *     Gated the same as other experiment mutations (owner/access-editor/admin,
+         *     require_experiment_edit_access — checked again inside run_redesign as
+         *     defense in depth) and only while status=='designed' (pt.3.4).
+         */
+        post: operations["start_redesign_api_v1_experiments__name__redesign_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/experiments/{name}/analyze": {
         parameters: {
             query?: never;
@@ -2891,6 +2915,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BlockOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_redesign_api_v1_experiments__name__redesign_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesignRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
                 };
             };
             /** @description Validation Error */

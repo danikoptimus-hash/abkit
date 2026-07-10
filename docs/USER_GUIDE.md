@@ -34,6 +34,21 @@ Every experiment has two independent pieces of state:
 
 Both are toggled from clickable badges at the top of the experiment page.
 
+While an experiment is still `designed` (before you've moved it to
+`running`), its "⋯" menu offers **Redesign** — discard the current split,
+MDE table, and split checks, and reopen the design wizard pre-filled with
+the experiment's current config (dataset, groups, metrics, everything —
+including the dataset, which you're free to swap for a different one). The
+experiment's name can't be changed as part of a redesign (use Edit
+Properties for that). Submitting replaces the split and config on the same
+experiment — it isn't a new one — and deletes any analysis results already
+run against the old split, since they describe a randomization that no
+longer exists; the confirmation dialog tells you exactly how many will be
+deleted before you proceed. Once an experiment has moved past `designed`,
+Redesign disappears entirely (not just disabled) — redesigning a test after
+it's started collecting data would invalidate whatever's already been
+observed, so the only path from there is **Archive** and a new experiment.
+
 ### Datasets: where your data comes from
 
 ABKit doesn't accept files directly inside the design wizard or Analyze/
@@ -184,7 +199,11 @@ The design report always includes:
   data": hover it — a metric with no pre-period column shows "no pre-period
   column specified", while a metric that has one but whose correlation with
   it is too weak to matter (|ρ| < 0.1) still shows the computed number, with
-  a "low correlation, negligible gain" hint instead of hiding it.
+  a "low correlation, negligible gain" hint instead of hiding it. Next to
+  each relative MDE column is an **MDE (abs.)** column (abs = rel ×
+  baseline, shown on hover) — in percentage points for `binary` metrics
+  (e.g. a 5% relative MDE on a 17.4% baseline conversion rate is "0.96 pp"),
+  or in the metric's own units for `continuous` ones.
 - **SRM check** (Sample Ratio Mismatch) — a chi-square test comparing the
   actual group sizes against the intended split ratio. If it fails
   (p < 0.001), don't trust downstream analysis until you find the cause (a
@@ -202,15 +221,24 @@ Once you have post-period data, open the experiment's **Analyze** tab:
 
 1. Select the dataset with your post-period results (or click **Generate demo
    post-period data (+3% effect)** to try the flow without real data).
-2. Set **Multiple testing correction** — `holm` (default), `bonferroni`,
-   `fdr_bh` (Benjamini-Hochberg), or none. This only affects how the p-value
-   is adjusted across your primary metrics; it doesn't change the raw
-   statistics.
-3. Optionally check **Compare alternative methods** to additionally compute
-   Welch (raw and with 1% trimming), Welch+CUPED, Bootstrap BCa, and
-   Mann-Whitney — useful for sanity-checking that your designed method's
-   conclusion is robust, but these extra rows never factor into the verdict.
-4. **Run analysis**. This is an explicit step — preparing/uploading data does
+2. Open **Advanced options** if you need to change anything — it's collapsed
+   by default so most runs don't need to touch it:
+   - **Multiple testing correction** — `holm` (default), `bonferroni`,
+     `fdr_bh` (Benjamini-Hochberg), or none. This only appears when your
+     design actually tests more than one hypothesis (more than one primary
+     metric, or more than one treatment group) — with a caption spelling out
+     exactly how many (metrics × treatment groups) and why it matters. With
+     a single hypothesis, any correction is a no-op, so the control (and the
+     **p-value (adj.)** / **Correction** columns in the results table) is
+     hidden rather than offered.
+   - **Compare alternative methods** — checked by default, so you get
+     Welch (raw and with 1% trimming), Welch+CUPED, Bootstrap BCa, and
+     Mann-Whitney alongside your designed method without having to think
+     about it; useful for sanity-checking that the conclusion is robust
+     (these extra rows never factor into the verdict). Uncheck it for faster
+     runs on large datasets or weak machines — Bootstrap in particular
+     (10k iterations) is the heaviest of the bunch.
+3. **Run analysis**. This is an explicit step — preparing/uploading data does
    not run it automatically, so you control exactly when the (final,
    decision-driving) analysis happens.
 
@@ -236,9 +264,11 @@ The **Results** tab has, per metric:
   - **95% CI of lift** — confidence interval of the *relative* effect, not of
     the raw metric.
   - **p-value** vs **p-value (adj.)** — the adjusted value is what the
-    decision is actually based on (equals the raw p-value when there's only
-    one primary hypothesis); the gap between the two tells you how much the
-    multiple-testing correction cost you.
+    decision is actually based on; the gap between the two tells you how much
+    the multiple-testing correction cost you. With only one primary
+    hypothesis (one primary metric, one treatment group), adjustment is a
+    no-op, so this column (and **Correction**) is left out of the table
+    entirely instead of showing a value identical to the raw p-value.
   - **CUPED ρ** — correlation between the metric and its pre-period
     covariate, shown only on CUPED rows; variance reduction is roughly ρ².
     Low ρ means CUPED isn't helping much for that metric.

@@ -7,11 +7,15 @@ import type { WizardState } from './types'
 
 interface Props {
   state: WizardState
+  // Set when reached via /experiments/:name/redesign (5-part package pt.3)
+  // — submits to POST .../redesign (in-place replace) instead of POST
+  // /design (always-create). Job result shape is identical either way.
+  redesignName?: string
 }
 
 type Phase = 'idle' | 'running' | 'requires_confirmation' | 'failed'
 
-export function Step4Review({ state }: Props) {
+export function Step4Review({ state, redesignName }: Props) {
   const navigate = useNavigate()
   const [phase, setPhase] = useState<Phase>('idle')
   const [stage, setStage] = useState<string | null>(null)
@@ -91,9 +95,14 @@ export function Step4Review({ state }: Props) {
         config.mde_source_metric = mdeAbsMetric.name
       }
 
-      const { data, error } = await apiClient.POST('/api/v1/design', {
-        body: { config, dataset_id: state.datasetId, confirmed },
-      })
+      const { data, error } = redesignName
+        ? await apiClient.POST('/api/v1/experiments/{name}/redesign', {
+            params: { path: { name: redesignName } },
+            body: { config, dataset_id: state.datasetId, confirmed },
+          })
+        : await apiClient.POST('/api/v1/design', {
+            body: { config, dataset_id: state.datasetId, confirmed },
+          })
       if (error) throw new Error(errorMessage(error))
       await pollJob(data.job_id)
     } catch (e) {
@@ -125,7 +134,7 @@ export function Step4Review({ state }: Props) {
 
       {phase === 'idle' && (
         <Button type="primary" size="large" onClick={() => submit(false)}>
-          Design
+          {redesignName ? 'Redesign' : 'Design'}
         </Button>
       )}
 

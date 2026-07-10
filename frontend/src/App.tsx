@@ -34,6 +34,14 @@ function App() {
           }
         />
         <Route path="/experiments/:name" element={<ExperimentPage />} />
+        <Route
+          path="/experiments/:name/redesign"
+          element={
+            <RequireAuth minRole="editor">
+              <DesignWizardPage />
+            </RequireAuth>
+          }
+        />
         <Route path="/datasets" element={<DatasetsPage />} />
         <Route path="/validation" element={<ValidationPage />} />
         <Route path="/profile" element={<ProfilePage />} />

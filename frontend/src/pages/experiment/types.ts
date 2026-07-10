@@ -46,3 +46,23 @@ export interface ComputedDesignSummary {
 export function getComputed(config: Record<string, unknown>): ComputedDesignSummary | null {
   return (config.computed as ComputedDesignSummary | null | undefined) ?? null
 }
+
+export interface HypothesisFamily {
+  primaryCount: number
+  treatmentGroupCount: number
+  familySize: number
+}
+
+// Hypothesis family (5-part package pt.5.1): primary metrics × treatment
+// groups (control excluded). Secondary/exploratory metrics don't count —
+// they're informative only, never part of the multiple-testing family.
+// familySize == 1 means there's exactly one hypothesis being tested, so any
+// correction method is a no-op — the control is hidden rather than shown
+// with a choice that changes nothing.
+export function hypothesisFamily(config: Record<string, unknown>): HypothesisFamily {
+  const metrics = (config.metrics as { role: string }[] | undefined) ?? []
+  const groups = (config.groups as Record<string, number> | undefined) ?? {}
+  const primaryCount = metrics.filter((m) => m.role === 'primary').length
+  const treatmentGroupCount = Math.max(Object.keys(groups).length - 1, 0)
+  return { primaryCount, treatmentGroupCount, familySize: primaryCount * treatmentGroupCount }
+}

@@ -73,6 +73,26 @@ class DbExperimentStore:
         path = self._artifact_dir(config.name)
         return ExperimentHandle(name=config.name, path=path, config=config, assignments=assignments)
 
+    def replace_experiment(
+        self, name: str, config: DesignConfig, assignments: pd.DataFrame
+    ) -> ExperimentHandle:
+        """In-place redesign (5-part package pt.3): same experiment row/id —
+        unlike create_experiment, does not touch owner_id/created_at/status.
+        Old assignments are deleted and replaced with the new split; isolation
+        self-exclusion (abkit/design/isolation.py, current_experiment_name)
+        already ran against the OLD assignments before this is called, so
+        it's safe to drop them only now that the new split has been
+        computed and validated."""
+        exp_row = self.experiments.get_by_name(name)
+        if exp_row is None:
+            raise DbStoreError(f"Experiment '{name}' not found")
+        config_dict = config.model_dump(mode="json")
+        self.assignments.delete_for_experiment(exp_row.id)
+        self.assignments.bulk_insert(exp_row.id, assignments)
+        self.experiments.update_config(name, config_dict)
+        path = self._artifact_dir(name)
+        return ExperimentHandle(name=name, path=path, config=config, assignments=assignments)
+
     def load_experiment(self, name: str) -> ExperimentHandle:
         exp_row = self.experiments.get_by_name(name)
         if exp_row is None:

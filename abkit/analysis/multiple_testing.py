@@ -38,11 +38,19 @@ def benjamini_hochberg(p_values: list[float]) -> list[float]:
     return adjusted.tolist()
 
 
+def _no_correction(p_values: list[float]) -> list[float]:
+    """Passthrough — mathematically equivalent to any correction when there
+    is only one hypothesis in the family (5-part package pt.5)."""
+    return list(p_values)
+
+
 _METHODS = {
     "bonferroni": bonferroni,
     "holm": holm,
     "bh": benjamini_hochberg,
     "benjamini-hochberg": benjamini_hochberg,
+    "fdr_bh": benjamini_hochberg,
+    "none": _no_correction,
 }
 
 

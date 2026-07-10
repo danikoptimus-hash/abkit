@@ -54,7 +54,8 @@ test('Compare alternative methods completes and shows Bootstrap in the detailed 
   await page.goto(`/experiments/${name}`)
   await page.getByRole('tab', { name: 'Analysis' }).click()
 
-  await page.getByRole('checkbox', { name: 'Compare alternative methods' }).check()
+  // Compare alternative methods is checked by default (5-part package
+  // pt.4) — no need to open Advanced options and check it manually.
   await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
   await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
 

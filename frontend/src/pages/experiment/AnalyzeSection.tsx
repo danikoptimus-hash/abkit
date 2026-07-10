@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Select, Checkbox, Typography, Alert, Progress, Tooltip } from 'antd'
+import { Button, Select, Checkbox, Typography, Alert, Progress, Tooltip, Collapse } from 'antd'
 import { ThunderboltOutlined, ReloadOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { useJobPolling } from '../../api/useJobPolling'
 import { DatasetSelect } from '../../components/DatasetSelect'
 import { AnalyzeResults } from './AnalyzeResults'
 import { experimentResultsQueryKey, fetchExperimentResults } from './resultsQuery'
+import type { HypothesisFamily } from './types'
 
 const CORRECTION_OPTIONS = [
   { value: 'holm', label: 'holm' },
@@ -24,15 +25,31 @@ interface PreparedDataset {
   isDemo: boolean
 }
 
-export function AnalyzeSection({ experimentName, hasAssignments }: { experimentName: string; hasAssignments: boolean }) {
+export function AnalyzeSection({
+  experimentName, hasAssignments, family,
+}: {
+  experimentName: string
+  hasAssignments: boolean
+  // Primary metrics × treatment groups (see hypothesisFamily) — a family
+  // of 1 means correction is a no-op, so the control is hidden rather than
+  // offered (5-part package pt.5.1).
+  family: HypothesisFamily
+}) {
   const queryClient = useQueryClient()
   const [prepared, setPrepared] = useState<PreparedDataset | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   const [correction, setCorrection] = useState('holm')
-  const [compareMethods, setCompareMethods] = useState(false)
+  // Default on (5-part package pt.4, an approved deviation from an earlier
+  // "remove the checkbox" request): most users benefit from seeing method
+  // agreement without thinking about it. Left as a checkbox — not removed —
+  // because compare_methods (especially Bootstrap, 10k iterations) is
+  // noticeably slower/heavier on large datasets or weak machines.
+  const [compareMethods, setCompareMethods] = useState(true)
   const [dateCol, setDateCol] = useState<string | undefined>(undefined)
+  const showCorrection = family.familySize > 1
+  const effectiveCorrection = showCorrection ? correction : 'none'
 
   // null = follow the default (open until the first result exists, then
   // collapsed behind "Re-run analysis" — UX package, п.3).
@@ -96,7 +113,10 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
     reset()
     const { data, error } = await apiClient.POST('/api/v1/experiments/{name}/analyze', {
       params: { path: { name: experimentName } },
-      body: { dataset_id: prepared.id, correction, compare_methods: compareMethods, date_col: dateCol ?? null },
+      body: {
+        dataset_id: prepared.id, correction: effectiveCorrection, compare_methods: compareMethods,
+        date_col: dateCol ?? null,
+      },
     })
     if (error) {
       setUploadError(errorMessage(error))
@@ -118,21 +138,43 @@ export function AnalyzeSection({ experimentName, hasAssignments }: { experimentN
               not after (UX package, item A). */}
           <Typography.Text strong>Analysis options</Typography.Text>
           <div style={{ marginTop: 8, marginBottom: 24 }}>
-            <div style={{ marginBottom: 12 }}>
-              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-                Multiple testing correction
-              </Typography.Text>
-              <Select
-                style={{ width: '100%' }}
-                value={correction}
-                onChange={setCorrection}
-                options={CORRECTION_OPTIONS}
-                disabled={running}
-              />
-            </div>
-            <Checkbox checked={compareMethods} onChange={(e) => setCompareMethods(e.target.checked)} disabled={running}>
-              Compare alternative methods
-            </Checkbox>
+            <Collapse
+              size="small"
+              style={{ marginBottom: 12 }}
+              items={[
+                {
+                  key: 'advanced',
+                  label: 'Advanced options',
+                  children: (
+                    <>
+                      {showCorrection && (
+                        <div style={{ marginBottom: 12 }}>
+                          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+                            Multiple testing correction
+                          </Typography.Text>
+                          <Select
+                            style={{ width: '100%' }}
+                            value={correction}
+                            onChange={setCorrection}
+                            options={CORRECTION_OPTIONS}
+                            disabled={running}
+                          />
+                          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                            Your design tests {family.familySize} hypotheses ({family.primaryCount} primary metric
+                            {family.primaryCount === 1 ? '' : 's'} × {family.treatmentGroupCount} treatment group
+                            {family.treatmentGroupCount === 1 ? '' : 's'}) — correction controls the family-wise
+                            error rate.
+                          </Typography.Paragraph>
+                        </div>
+                      )}
+                      <Checkbox checked={compareMethods} onChange={(e) => setCompareMethods(e.target.checked)} disabled={running}>
+                        Compare alternative methods
+                      </Checkbox>
+                    </>
+                  ),
+                },
+              ]}
+            />
             {prepared && prepared.columns.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>

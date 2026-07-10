@@ -12,28 +12,12 @@ import {
   SQL_EXPLANATION,
   NO_DATA_EXPLANATION,
 } from './helpTexts'
-import type { WizardState, GroupFormRow, MetricFormRow, MetricConfig, DesignConfig } from './types'
-import { nextId } from './types'
+import type { WizardState, DesignConfig } from './types'
+import { groupsFromApi, metricsFromApi } from './types'
 
 interface Props {
   state: WizardState
   setState: (updater: (prev: WizardState) => WizardState) => void
-}
-
-function groupsFromApi(groups: Record<string, number>): GroupFormRow[] {
-  return Object.entries(groups).map(([name, prop]) => ({ id: nextId('group'), name, prop }))
-}
-
-function metricsFromApi(metrics: MetricConfig[]): MetricFormRow[] {
-  return metrics.map((m) => ({
-    id: nextId('metric'),
-    name: m.name,
-    type: m.type as MetricFormRow['type'],
-    role: m.role as MetricFormRow['role'],
-    preCol: m.pre_col ?? null,
-    num: m.num ?? null,
-    den: m.den ?? null,
-  }))
 }
 
 // Preview rows carry only JSON-primitive values — dtypes aren't persisted

@@ -11,6 +11,7 @@ import { RelativeTime } from '../../components/RelativeTime'
 
 interface Props {
   experimentName: string
+  familySize: number
   blocks: BlockDraft[]
   editing: boolean
   onChangeBlock: (id: string | null, patch: Partial<BlockDraft>) => void
@@ -18,7 +19,7 @@ interface Props {
   onRemoveBlock: (id: string | null) => void
 }
 
-export function ResultsSection({ experimentName, blocks, editing, onChangeBlock, onAddBlock, onRemoveBlock }: Props) {
+export function ResultsSection({ experimentName, familySize, blocks, editing, onChangeBlock, onAddBlock, onRemoveBlock }: Props) {
   // Same query key as AnalyzeSection (Analysis tab) — shares the react-query
   // cache entry, so opening the Results tab directly (deep link/reload)
   // still gets the latest results without needing the Analysis tab to have
@@ -47,6 +48,7 @@ export function ResultsSection({ experimentName, blocks, editing, onChangeBlock,
             controlName={Object.values(results.chart_data.metrics)[0]?.control_name ?? 'control'}
             correction={results.correction ?? 'none'}
             experimentName={experimentName}
+            showCorrection={familySize > 1}
           />
           <HelpCollapse chartType="verdicts_table" table />
 

@@ -132,15 +132,26 @@ function cupedCell(value: number | null, rho: number | null, format: (v: number)
   return format(value)
 }
 
+// abs = rel × baseline; binary metrics read as percentage points (the
+// baseline is itself a proportion, so raw units would be a tiny fraction
+// like 0.0096 — "pp" is what a reader expects from a conversion-rate MDE).
+function formatAbs(value: number | null, metricType: string): string {
+  if (value == null) return '—'
+  return metricType === 'binary' ? `${(value * 100).toFixed(2)} pp` : value.toFixed(2)
+}
+
 function mdeTable(computed: ComputedDesignSummary) {
   const rows = Object.entries(computed.power).map(([metricName, p]) => ({
     key: metricName,
     metric: metricName,
+    metricType: p.metric_type,
     baseline: p.baseline_mean,
     n_per_group: p.sample_size_per_group,
     mde_rel: p.mde_rel,
+    mde_abs: p.mde_abs,
     rho: p.rho,
     mde_rel_cuped: p.mde_rel_cuped,
+    mde_abs_cuped: p.mde_abs_cuped,
     n_per_group_cuped: p.sample_size_per_group_cuped,
   }))
   const hasCuped = rows.some((r) => r.rho !== null && r.rho !== undefined)
@@ -149,6 +160,15 @@ function mdeTable(computed: ComputedDesignSummary) {
     { title: 'Metric', dataIndex: 'metric' },
     { title: 'Baseline', dataIndex: 'baseline', render: (v: number | null) => (v == null ? '—' : v.toFixed(4)) },
     { title: 'MDE (rel.)', dataIndex: 'mde_rel', render: (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(1)}%`) },
+    {
+      title: (
+        <Tooltip title="abs = rel × baseline">
+          <span>MDE (abs.)</span>
+        </Tooltip>
+      ),
+      dataIndex: 'mde_abs',
+      render: (v: number | null, record: (typeof rows)[number]) => formatAbs(v, record.metricType),
+    },
     { title: 'n per group', dataIndex: 'n_per_group', render: (v: number | null) => v ?? '—' },
     ...(hasCuped
       ? [
@@ -157,6 +177,16 @@ function mdeTable(computed: ComputedDesignSummary) {
             dataIndex: 'mde_rel_cuped',
             render: (v: number | null, record: (typeof rows)[number]) =>
               cupedCell(v, record.rho, (x) => `${(x * 100).toFixed(1)}%`),
+          },
+          {
+            title: (
+              <Tooltip title="abs = rel × baseline">
+                <span>MDE (abs., CUPED)</span>
+              </Tooltip>
+            ),
+            dataIndex: 'mde_abs_cuped',
+            render: (v: number | null, record: (typeof rows)[number]) =>
+              cupedCell(v, record.rho, (x) => formatAbs(x, record.metricType)),
           },
           {
             title: 'n per group (CUPED)',

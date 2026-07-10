@@ -493,6 +493,7 @@ class Experiment:
         experiments_dir: Path | None = None,
         progress_callback: Callable[[str], None] | None = None,
         owner_id: str | None = None,
+        is_redesign: bool = False,
     ) -> "Experiment":
         """Полный цикл дизайна: валидация -> изоляция -> мощность -> страты -> сплит ->
         проверки -> сохранение. Возвращает Experiment с заполненным .report и .assignments.
@@ -503,6 +504,15 @@ class Experiment:
         доступа, DOCKER.md §4.1); в файловом режиме игнорируется (там нет модели
         пользователей). Если не передан в db-режиме — владельцем становится
         служебный системный юзер (см. abkit/db/store.py).
+        is_redesign: True для "Redesign" (5-part package pt.3) — сохраняет
+        результат в СУЩЕСТВУЮЩУЮ строку эксперимента (config.name должен уже
+        существовать) вместо создания новой; требует store.replace_experiment
+        (только ABKIT_MODE=db — DbExperimentStore). Изоляция по-прежнему
+        самоисключает текущий эксперимент через current_experiment_name=
+        config.name (abkit/design/isolation.py) — старые assignments еще не
+        удалены на момент apply_isolation(), поэтому исключение работает как
+        обычно; store.replace_experiment удаляет их только ПОСЛЕ того, как
+        новый сплит уже посчитан.
         """
         from abkit.experiment_store import get_experiment_store
 
@@ -678,7 +688,12 @@ class Experiment:
         )
 
         cb("Saving experiment...")
-        handle = store.create_experiment(final_config, assignments, owner_id=owner_id)
+        if is_redesign:
+            if not hasattr(store, "replace_experiment"):
+                raise DesignError("Redesign requires ABKIT_MODE=db (no file-mode support)")
+            handle = store.replace_experiment(config.name, final_config, assignments)
+        else:
+            handle = store.create_experiment(final_config, assignments, owner_id=owner_id)
         path = handle.path
 
         experiment = cls(config=final_config, path=path, experiments_dir=experiments_dir)
