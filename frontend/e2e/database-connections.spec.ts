@@ -56,10 +56,35 @@ test('create a database connection, test it, preview SQL, create a dataset, and 
   await page.getByRole('button', { name: 'Dataset' }).click()
   await page.getByRole('tab', { name: 'From SQL' }).click()
 
-  await page.getByRole('combobox').click()
+  await page.getByRole('combobox', { name: 'from-sql-connection-select' }).click()
   await page.getByTitle(new RegExp(connectionName)).click()
 
-  await page.getByPlaceholder('SELECT user_id, revenue FROM events WHERE ...').fill('SELECT id, email, role FROM users')
+  // Schema/table pickers (UX package, Datasets п.1.1/1.3): selecting a
+  // table autofills the SQL box with "SELECT * FROM schema.table" — but
+  // once the user edits it by hand, further table selections stop
+  // clobbering that edit ("SQL is the source of truth").
+  const schemaSelect = page.getByRole('combobox', { name: 'from-sql-schema-select' })
+  await schemaSelect.click()
+  await schemaSelect.fill('public')
+  await page.getByTitle('public').click()
+
+  const tableSelect = page.getByRole('combobox', { name: 'from-sql-table-select' })
+  await tableSelect.click()
+  await tableSelect.fill('users')
+  await page.getByTitle('users', { exact: true }).click()
+
+  const sqlBox = page.getByPlaceholder('SELECT user_id, revenue FROM events WHERE ...')
+  await expect(sqlBox).toHaveValue('SELECT * FROM "public"."users"')
+
+  // Manually edit — selecting a DIFFERENT table afterward must NOT
+  // overwrite this (the app's own "experiments" table also always exists).
+  await sqlBox.fill('SELECT * FROM "public"."users" LIMIT 1')
+  await tableSelect.click()
+  await tableSelect.fill('experiments')
+  await page.getByTitle('experiments', { exact: true }).click()
+  await expect(sqlBox).toHaveValue('SELECT * FROM "public"."users" LIMIT 1')
+
+  await sqlBox.fill('SELECT id, email, role FROM users')
   await page.getByRole('button', { name: 'Preview' }).click()
   await expect(page.getByRole('columnheader', { name: 'email' })).toBeVisible({ timeout: 10_000 })
 

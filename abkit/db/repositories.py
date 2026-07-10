@@ -465,17 +465,37 @@ class DatasetRepo:
             return ds
 
     def delete(self, dataset_id: uuid_mod.UUID) -> None:
-        """Реальное удаление строки — сейчас нужно только для админской
-        уборки орфанных датасетов (не привязанных ни к одному эксперименту
-        ни через legacy experiment_id, ни через experiment_datasets), не
-        вызывается из обычного UI-флоу (у датасета нет кнопки удаления —
-        см. CLAUDE.md, датасет-центричная модель). Файл на диске (storage_path)
+        """Реальное удаление строки (Actions -> Delete, UX-пакет Datasets
+        §2.2 — usage-проверка и подтверждение делает вызывающая сторона,
+        abkit/jobs.py::run_delete_dataset). Файл на диске (storage_path)
         удаляет вызывающая сторона."""
         with session_scope() as s:
             ds = s.get(Dataset, dataset_id)
             if ds is None:
                 raise RepoError(f"Dataset {dataset_id} not found")
             s.delete(ds)
+
+    def rename(self, dataset_id: uuid_mod.UUID, filename: str) -> None:
+        """Edit dataset -> name (UX-пакет Datasets §2.3) — для любого source."""
+        with session_scope() as s:
+            ds = s.get(Dataset, dataset_id)
+            if ds is None:
+                raise RepoError(f"Dataset {dataset_id} not found")
+            ds.filename = filename
+
+    def update_sql_source(
+        self, dataset_id: uuid_mod.UUID, *, connection_id: uuid_mod.UUID | None, sql_text: str | None
+    ) -> None:
+        """Edit dataset -> connection/SQL for source='sql' (UX-пакет Datasets
+        §2.3) — только меняет что ИСПОЛЬЗОВАТЬ при следующем фетче; сам
+        re-fetch (n_rows/columns/sha256/fetched_at) делает отдельный джоб,
+        переиспользующий run_refresh_sql_dataset ПОСЛЕ этого вызова."""
+        with session_scope() as s:
+            ds = s.get(Dataset, dataset_id)
+            if ds is None:
+                raise RepoError(f"Dataset {dataset_id} not found")
+            ds.connection_id = connection_id
+            ds.sql_text = sql_text
 
     def attach_to_experiment(self, dataset_id: uuid_mod.UUID, experiment_id: uuid_mod.UUID) -> None:
         """Привязывает pre_design датасет (загружен до создания эксперимента,
@@ -564,6 +584,19 @@ class ExperimentDatasetRepo:
                 s.expunge(r)
             return rows
 
+    def experiments_using_dataset(self, dataset_id: uuid_mod.UUID) -> list[uuid_mod.UUID]:
+        """Distinct experiment ids that have actually used this dataset
+        (design/analyze/validate) — dataset delete usage-check (UX package,
+        Datasets п.2.2)."""
+        with session_scope() as s:
+            return list(
+                s.scalars(
+                    select(ExperimentDataset.experiment_id)
+                    .where(ExperimentDataset.dataset_id == dataset_id)
+                    .distinct()
+                )
+            )
+
 
 class ResultRepo:
     def create(
@@ -573,12 +606,14 @@ class ResultRepo:
         results: dict[str, Any],
         report_path: str,
         dataset_id: uuid_mod.UUID | None = None,
+        dataset_filename: str | None = None,
         created_by: uuid_mod.UUID | None = None,
     ) -> uuid_mod.UUID:
         with session_scope() as s:
             r = AnalysisResult(
                 experiment_id=experiment_id,
                 dataset_id=dataset_id,
+                dataset_filename=dataset_filename,
                 results=results,
                 report_path=report_path,
                 created_by=created_by,

@@ -310,23 +310,20 @@ def get_results(name: str, user: CurrentUser = Depends(get_current_user)) -> dic
     (UX package, п.3). run_number = порядковый номер ЭТОГО прогона среди всех
     прогонов эксперимента; для latest_for_experiment() он всегда равен
     текущему count_for_experiment() (это же и есть последний прогон)."""
-    from abkit.db.repositories import DatasetRepo, ResultRepo
+    from abkit.db.repositories import ResultRepo
 
     exp = _get_experiment_or_404(name)
     result = ResultRepo().latest_for_experiment(exp.id)
     if result is None:
         raise APIError(404, "not_found", "Analysis results for this experiment are not ready yet")
 
-    dataset_filename = None
-    if result.dataset_id:
-        dataset = DatasetRepo().get_by_id(result.dataset_id)
-        dataset_filename = dataset.filename if dataset else None
-
     return {
         **result.results,
         "run_meta": {
             "created_at": result.created_at.isoformat(),
-            "dataset_filename": dataset_filename,
+            # Frozen at analyze time (migration 0009) — survives the dataset
+            # itself being deleted later, unlike a live DatasetRepo lookup.
+            "dataset_filename": result.dataset_filename,
             "run_number": ResultRepo().count_for_experiment(exp.id),
         },
     }
@@ -533,10 +530,18 @@ def _save_analysis(
 
     dataset_id/created_by — для "Analyzed N ago with dataset X (run #K)" на
     вкладке Results (UX package, п.3); None для demo-анализа (нет
-    загруженного датасета, только сгенерированные данные)."""
+    загруженного датасета, только сгенерированные данные). Имя файла
+    датасета замораживается здесь же (dataset_filename, миграция 0009) —
+    результат остается самодостаточным, даже если сам датасет потом удалят."""
     import json
 
+    from abkit.db.repositories import DatasetRepo
     from backend.chart_data import build_chart_data, sanitize_json_floats
+
+    dataset_filename = None
+    if dataset_id is not None:
+        ds = DatasetRepo().get_by_id(dataset_id)
+        dataset_filename = ds.filename if ds else None
 
     report_path = results.report()
     payload = json.loads(results.to_json())
@@ -544,7 +549,7 @@ def _save_analysis(
     payload = sanitize_json_floats(payload)
     DbExperimentStore().save_analysis_result(
         name, json.dumps(payload, ensure_ascii=False), report_path,
-        dataset_id=dataset_id, created_by=created_by,
+        dataset_id=dataset_id, dataset_filename=dataset_filename, created_by=created_by,
     )
 
 

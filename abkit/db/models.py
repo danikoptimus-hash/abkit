@@ -224,9 +224,19 @@ class AnalysisResult(Base):
     experiment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("experiments.id", ondelete="CASCADE"), nullable=False
     )
+    # ondelete="SET NULL" (migration 0009): deleting a dataset must not be
+    # blocked by — nor break — the results of experiments that already
+    # analyzed it. results.json is self-sufficient; only this live pointer
+    # goes null (GET /experiments/{name}/results already handles that).
     dataset_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("datasets.id"), nullable=True
+        UUID(as_uuid=True), ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True
     )
+    # Frozen snapshot of the dataset's filename at analyze time (migration
+    # 0009) — results.json is meant to be self-sufficient (UX package,
+    # Datasets §2.2), so "what was analyzed" must survive the dataset row
+    # itself being deleted later (dataset_id above goes null then), not just
+    # degrade to "unknown dataset".
+    dataset_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
     results: Mapped[dict] = mapped_column(JSONB, nullable=False)
     report_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(

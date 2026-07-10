@@ -209,3 +209,110 @@ def test_metric_baseline_404_for_unknown_dataset(app_client, tmp_path, monkeypat
         json={"name": "value", "type": "continuous"},
     )
     assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# UX package (Datasets §2): usage-check, delete, edit
+# --------------------------------------------------------------------------
+
+
+def test_dataset_usage_empty_when_unused(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    resp = app_client.post(
+        "/api/v1/datasets", data={"kind": "pre_design"},
+        files={"file": ("unused.csv", "a,b\n1,2\n", "text/csv")},
+    )
+    dataset_id = resp.json()["id"]
+
+    usage_resp = app_client.get(f"/api/v1/datasets/{dataset_id}/usage")
+    assert usage_resp.status_code == 200
+    assert usage_resp.json()["experiments"] == []
+
+
+def test_dataset_usage_lists_experiment(app_client, tmp_path):
+    _login(app_client)
+    dataset_id = _make_dataset(tmp_path)  # linked to experiment "exp_ds" via legacy experiment_id
+    resp = app_client.get(f"/api/v1/datasets/{dataset_id}/usage")
+    assert resp.status_code == 200
+    assert resp.json()["experiments"] == ["exp_ds"]
+
+
+def test_delete_unused_dataset_no_confirm_needed(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    resp = app_client.post(
+        "/api/v1/datasets", data={"kind": "pre_design"},
+        files={"file": ("to_delete.csv", "a,b\n1,2\n", "text/csv")},
+    )
+    dataset_id = resp.json()["id"]
+
+    delete_resp = app_client.request("DELETE", f"/api/v1/datasets/{dataset_id}", json={})
+    assert delete_resp.status_code == 204
+
+    preview_resp = app_client.get(f"/api/v1/datasets/{dataset_id}/preview")
+    assert preview_resp.status_code == 404
+
+
+def test_delete_used_dataset_requires_typed_delete(app_client, tmp_path):
+    # admin: _make_dataset doesn't set uploaded_by, so only admin (not just
+    # any editor) can delete it — ownership permission is covered separately
+    # by test_delete_dataset_forbidden_for_non_owner_non_admin.
+    UserRepo().create(email="admin_del@co.com", first_name="A", password_hash=hash_password("pw12345"), role="admin")
+    app_client.post("/api/v1/auth/login", json={"email": "admin_del@co.com", "password": "pw12345"})
+    dataset_id = _make_dataset(tmp_path)
+
+    without_confirm = app_client.request("DELETE", f"/api/v1/datasets/{dataset_id}", json={})
+    assert without_confirm.status_code == 400
+    body = without_confirm.json()
+    assert body["error"]["code"] == "confirmation_required"
+    assert body["error"]["details"]["experiments"] == ["exp_ds"]
+
+    with_confirm = app_client.request("DELETE", f"/api/v1/datasets/{dataset_id}", json={"confirm": "DELETE"})
+    assert with_confirm.status_code == 204
+
+
+def test_delete_dataset_forbidden_for_non_owner_non_admin(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    UserRepo().create(email="owner2@co.com", first_name="O", password_hash=hash_password("pw12345"), role="editor")
+    app_client.post("/api/v1/auth/login", json={"email": "owner2@co.com", "password": "pw12345"})
+    resp = app_client.post(
+        "/api/v1/datasets", data={"kind": "pre_design"},
+        files={"file": ("owned.csv", "a,b\n1,2\n", "text/csv")},
+    )
+    dataset_id = resp.json()["id"]
+    app_client.post("/api/v1/auth/logout")
+
+    UserRepo().create(email="other_editor@co.com", first_name="OE", password_hash=hash_password("pw12345"), role="editor")
+    app_client.post("/api/v1/auth/login", json={"email": "other_editor@co.com", "password": "pw12345"})
+    delete_resp = app_client.request("DELETE", f"/api/v1/datasets/{dataset_id}", json={})
+    assert delete_resp.status_code == 403
+
+
+def test_patch_dataset_renames(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    resp = app_client.post(
+        "/api/v1/datasets", data={"kind": "pre_design"},
+        files={"file": ("original.csv", "a,b\n1,2\n", "text/csv")},
+    )
+    dataset_id = resp.json()["id"]
+
+    patch_resp = app_client.patch(f"/api/v1/datasets/{dataset_id}", json={"name": "renamed.csv"})
+    assert patch_resp.status_code == 200, patch_resp.text
+    body = patch_resp.json()
+    assert body["dataset"]["filename"] == "renamed.csv"
+    assert body["job_id"] is None
+
+
+def test_patch_dataset_rejects_sql_fields_for_upload_source(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    resp = app_client.post(
+        "/api/v1/datasets", data={"kind": "pre_design"},
+        files={"file": ("upload_only.csv", "a,b\n1,2\n", "text/csv")},
+    )
+    dataset_id = resp.json()["id"]
+
+    patch_resp = app_client.patch(f"/api/v1/datasets/{dataset_id}", json={"sql_text": "SELECT 1"})
+    assert patch_resp.status_code == 404  # StorageError -> not_found, per backend/errors.py

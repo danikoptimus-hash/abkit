@@ -582,6 +582,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/datasets/{dataset_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dataset Usage
+         * @description Which experiments use this dataset (UX package, Datasets §2.2) —
+         *     the frontend calls this right before showing a Delete confirmation, to
+         *     decide between the plain confirm Modal (unused) and the strict
+         *     DELETE-typed one listing them (used).
+         */
+        get: operations["get_dataset_usage_api_v1_datasets__dataset_id__usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Dataset
+         * @description Owner (uploaded_by) or Admin. confirm="DELETE" is only enforced when
+         *     the dataset is actually in use (abkit/jobs.py::run_delete_dataset raises
+         *     DatasetInUseError otherwise, mapped to 400 by backend/errors.py) — an
+         *     unused dataset deletes on a plain request, matching the two-tier
+         *     confirmation the frontend shows (UX package, Datasets §2.2).
+         */
+        delete: operations["delete_dataset_api_v1_datasets__dataset_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Dataset
+         * @description Owner or Admin (UX package, Datasets §2.3). Edits `name` immediately;
+         *     for source='sql', a changed connection_id/sql_text also submits a
+         *     re-fetch job (same mechanism as Refresh) — job_id is set in the response
+         *     only when that happened, so the frontend knows whether to poll.
+         */
+        patch: operations["patch_dataset_api_v1_datasets__dataset_id__patch"];
+        trace?: never;
+    };
     "/api/v1/admin/db-connections": {
         parameters: {
             query?: never;
@@ -650,6 +704,40 @@ export interface paths {
          *     tests the form's current values without persisting anything.
          */
         post: operations["test_draft_db_connection_api_v1_admin_db_connections_test_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/db-connections/{conn_id}/schemas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Connection Schemas */
+        get: operations["list_connection_schemas_api_v1_db_connections__conn_id__schemas_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/db-connections/{conn_id}/schemas/{schema}/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Connection Tables */
+        get: operations["list_connection_tables_api_v1_db_connections__conn_id__schemas__schema__tables_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1093,6 +1181,8 @@ export interface components {
             dtypes?: {
                 [key: string]: string;
             } | null;
+            /** Uploaded By */
+            uploaded_by?: string | null;
             /** Uploaded By Email */
             uploaded_by_email: string | null;
             /**
@@ -1126,6 +1216,22 @@ export interface components {
             rows: {
                 [key: string]: unknown;
             }[];
+        };
+        /**
+         * DatasetUsageResponse
+         * @description GET /datasets/{id}/usage (UX package, Datasets §2.2) — which
+         *     experiments use this dataset, drives which Delete confirmation the
+         *     frontend shows: empty -> plain confirm, non-empty -> strict DELETE-typed
+         *     modal listing them.
+         */
+        DatasetUsageResponse: {
+            /** Experiments */
+            experiments: string[];
+        };
+        /** DeleteDatasetRequest */
+        DeleteDatasetRequest: {
+            /** Confirm */
+            confirm?: string | null;
         };
         /** DeleteExperimentRequest */
         DeleteExperimentRequest: {
@@ -1494,6 +1600,26 @@ export interface components {
             /** Ssl */
             ssl?: boolean | null;
         };
+        /**
+         * PatchDatasetRequest
+         * @description PATCH /datasets/{id} (UX package, Datasets §2.3): name is always
+         *     editable; connection_id/sql_text only apply to source=sql datasets and
+         *     trigger a re-fetch (same mechanism as Refresh) when either changes.
+         */
+        PatchDatasetRequest: {
+            /** Name */
+            name?: string | null;
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Sql Text */
+            sql_text?: string | null;
+        };
+        /** PatchDatasetResponse */
+        PatchDatasetResponse: {
+            dataset: components["schemas"]["DatasetOut"];
+            /** Job Id */
+            job_id?: string | null;
+        };
         /** PatchExperimentRequest */
         PatchExperimentRequest: {
             /** Publication Status */
@@ -1540,6 +1666,11 @@ export interface components {
             /** Size Kb */
             size_kb: number;
         };
+        /** SchemasResponse */
+        SchemasResponse: {
+            /** Schemas */
+            schemas: string[];
+        };
         /** SqlPreviewRequest */
         SqlPreviewRequest: {
             /** Sql */
@@ -1562,6 +1693,11 @@ export interface components {
         StatusChangeRequest: {
             /** To */
             to: string;
+        };
+        /** TablesResponse */
+        TablesResponse: {
+            /** Tables */
+            tables: string[];
         };
         /** TestConnectionResult */
         TestConnectionResult: {
@@ -2639,6 +2775,10 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                /** @description Live search over filename (UX package, Datasets §3) */
+                q?: string | null;
+                /** @description Filter by source: upload|sql|demo */
+                source?: string | null;
             };
             header?: never;
             path?: never;
@@ -2874,6 +3014,111 @@ export interface operations {
             };
         };
     };
+    get_dataset_usage_api_v1_datasets__dataset_id__usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_dataset_api_v1_datasets__dataset_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteDatasetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_dataset_api_v1_datasets__dataset_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchDatasetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_db_connections_api_v1_admin_db_connections_get: {
         parameters: {
             query?: never;
@@ -3063,6 +3308,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestConnectionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_connection_schemas_api_v1_db_connections__conn_id__schemas_get: {
+        parameters: {
+            query?: {
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                conn_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemasResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_connection_tables_api_v1_db_connections__conn_id__schemas__schema__tables_get: {
+        parameters: {
+            query?: {
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                conn_id: string;
+                schema: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TablesResponse"];
                 };
             };
             /** @description Validation Error */

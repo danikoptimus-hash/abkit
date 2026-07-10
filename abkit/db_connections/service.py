@@ -170,3 +170,31 @@ def preview_connection_sql(current_user: CurrentUser, conn_id: uuid_mod.UUID, sq
     if conn is None:
         raise storage.StorageError(f"Database connection '{conn_id}' not found")
     return preview_select(_spec_from_row(conn), sql)
+
+
+def list_connection_schemas(current_user: CurrentUser, conn_id: uuid_mod.UUID, *, force_refresh: bool = False):
+    """GET /db-connections/{id}/schemas (UX package, Datasets §1.2) — editor+,
+    same right as preview_connection_sql: this is the "From SQL" form's
+    schema browser, not connection management."""
+    require_role(current_user, "editor")
+    from abkit import storage
+    from abkit.db_connections.introspection import list_schemas
+
+    conn = DatabaseConnectionRepo().get_by_id(conn_id)
+    if conn is None:
+        raise storage.StorageError(f"Database connection '{conn_id}' not found")
+    return list_schemas(_spec_from_row(conn), str(conn_id), force_refresh=force_refresh)
+
+
+def list_connection_tables(
+    current_user: CurrentUser, conn_id: uuid_mod.UUID, schema: str, *, force_refresh: bool = False
+):
+    """GET /db-connections/{id}/schemas/{schema}/tables — editor+."""
+    require_role(current_user, "editor")
+    from abkit import storage
+    from abkit.db_connections.introspection import list_tables
+
+    conn = DatabaseConnectionRepo().get_by_id(conn_id)
+    if conn is None:
+        raise storage.StorageError(f"Database connection '{conn_id}' not found")
+    return list_tables(_spec_from_row(conn), str(conn_id), schema, force_refresh=force_refresh)

@@ -29,14 +29,18 @@ test('"+ Dataset" modal uploads a file and it appears in the list with an Upload
   await expect(row.getByRole('button', { name: 'Refresh' })).toHaveCount(0)
 })
 
-test('From SQL tab renders a connection picker and SQL editor', async ({ page }) => {
+test('From SQL tab renders a connection picker, schema/table pickers, and SQL editor', async ({ page }) => {
   await loginViaUi(page)
   await page.goto('/datasets')
 
   await page.getByRole('button', { name: 'Dataset' }).click()
   await page.getByRole('tab', { name: 'From SQL' }).click()
 
-  await expect(page.getByRole('combobox')).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'from-sql-connection-select' })).toBeVisible()
+  // Schema/table are optional (UX package, Datasets §1.1/1.4) — visible but
+  // disabled until a connection (then a schema) is picked.
+  await expect(page.getByRole('combobox', { name: 'from-sql-schema-select' })).toBeDisabled()
+  await expect(page.getByRole('combobox', { name: 'from-sql-table-select' })).toBeDisabled()
   await expect(page.getByPlaceholder(/SELECT user_id, revenue FROM/)).toBeVisible()
   await expect(page.getByRole('button', { name: 'Preview' })).toBeDisabled()
 })

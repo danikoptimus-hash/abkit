@@ -15,6 +15,7 @@ class DatasetOut(BaseModel):
     n_rows: int
     columns: list[str]
     dtypes: dict[str, str] | None = None
+    uploaded_by: str | None = None
     uploaded_by_email: str | None
     uploaded_at: datetime
     source: str = "upload"
@@ -73,3 +74,33 @@ class MetricBaselineResponse(BaseModel):
 class DemoDesignDatasetResponse(BaseModel):
     dataset_id: str
     suggested_config: dict[str, Any]
+
+
+class DatasetUsageResponse(BaseModel):
+    """GET /datasets/{id}/usage (UX package, Datasets §2.2) — which
+    experiments use this dataset, drives which Delete confirmation the
+    frontend shows: empty -> plain confirm, non-empty -> strict DELETE-typed
+    modal listing them."""
+
+    experiments: list[str]
+
+
+class DeleteDatasetRequest(BaseModel):
+    confirm: str | None = None
+
+
+class PatchDatasetRequest(BaseModel):
+    """PATCH /datasets/{id} (UX package, Datasets §2.3): name is always
+    editable; connection_id/sql_text only apply to source=sql datasets and
+    trigger a re-fetch (same mechanism as Refresh) when either changes."""
+
+    name: str | None = None
+    connection_id: str | None = None
+    sql_text: str | None = None
+
+
+class PatchDatasetResponse(BaseModel):
+    dataset: DatasetOut
+    # Set when connection_id/sql_text changed — a re-fetch job was submitted
+    # (same mechanism as Refresh); None for a name-only edit (immediate).
+    job_id: str | None = None

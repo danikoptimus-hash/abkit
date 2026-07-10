@@ -19,8 +19,10 @@ from backend.schemas.db_connections import (
     CreateDatabaseConnectionRequest,
     DatabaseConnectionOut,
     PatchDatabaseConnectionRequest,
+    SchemasResponse,
     SqlPreviewRequest,
     SqlPreviewResponse,
+    TablesResponse,
     TestConnectionResult,
     TestDraftConnectionRequest,
 )
@@ -104,6 +106,32 @@ def test_draft_db_connection(
         username=body.username, password=body.password, ssl=body.ssl, extra_params=body.extra_params,
     )
     return TestConnectionResult(outcome=result.outcome, message=result.message)
+
+
+@public_router.get("/{conn_id}/schemas", response_model=SchemasResponse)
+def list_connection_schemas(
+    conn_id: str, refresh: bool = False, user: CurrentUser = Depends(require_min_role("editor")),
+) -> SchemasResponse:
+    from abkit.db_connections.sql_dataset import SqlExecutionError
+
+    try:
+        schemas = service.list_connection_schemas(user, _parse_id(conn_id), force_refresh=refresh)
+    except SqlExecutionError as e:
+        raise APIError(422, "sql_execution_error", str(e)) from e
+    return SchemasResponse(schemas=schemas)
+
+
+@public_router.get("/{conn_id}/schemas/{schema}/tables", response_model=TablesResponse)
+def list_connection_tables(
+    conn_id: str, schema: str, refresh: bool = False, user: CurrentUser = Depends(require_min_role("editor")),
+) -> TablesResponse:
+    from abkit.db_connections.sql_dataset import SqlExecutionError
+
+    try:
+        tables = service.list_connection_tables(user, _parse_id(conn_id), schema, force_refresh=refresh)
+    except SqlExecutionError as e:
+        raise APIError(422, "sql_execution_error", str(e)) from e
+    return TablesResponse(tables=tables)
 
 
 @public_router.post("/{conn_id}/preview", response_model=SqlPreviewResponse)

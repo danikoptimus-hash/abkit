@@ -31,10 +31,14 @@ from backend.schemas.datasets import (
     DatasetFromSqlRequest,
     DatasetOut,
     DatasetPreview,
+    DatasetUsageResponse,
+    DeleteDatasetRequest,
     DemoDesignDatasetResponse,
     MetricBaselineRequest,
     MetricBaselineResponse,
     PaginatedDatasets,
+    PatchDatasetRequest,
+    PatchDatasetResponse,
 )
 from backend.schemas.design import JobAccepted
 
@@ -48,6 +52,7 @@ def _to_dataset_out(d, exp_name_by_id: dict, email_by_id: dict, connection_name_
         id=str(d.id), experiment_id=str(d.experiment_id) if d.experiment_id else None,
         experiment_name=exp_name_by_id.get(d.experiment_id),
         kind=d.kind, filename=d.filename, n_rows=d.n_rows, columns=d.columns,
+        uploaded_by=str(d.uploaded_by) if d.uploaded_by else None,
         uploaded_by_email=email_by_id.get(d.uploaded_by) if d.uploaded_by else None,
         uploaded_at=d.uploaded_at, source=d.source,
         connection_id=str(d.connection_id) if d.connection_id else None,
@@ -60,9 +65,16 @@ def _to_dataset_out(d, exp_name_by_id: dict, email_by_id: dict, connection_name_
 def list_datasets(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
+    q: str | None = Query(default=None, description="Live search over filename (UX package, Datasets §3)"),
+    source: str | None = Query(default=None, description="Filter by source: upload|sql|demo"),
     user: CurrentUser = Depends(get_current_user),
 ) -> PaginatedDatasets:
     all_datasets = DatasetRepo().list_all()
+    if q:
+        q_lower = q.lower()
+        all_datasets = [d for d in all_datasets if q_lower in d.filename.lower()]
+    if source:
+        all_datasets = [d for d in all_datasets if d.source == source]
     total = len(all_datasets)
     start = (page - 1) * page_size
     page_items = all_datasets[start : start + page_size]
@@ -287,3 +299,60 @@ def refresh_sql_dataset(
 
     job = runner.submit("dataset_refresh", uuid_mod.UUID(user.id), _run)
     return JobAccepted(job_id=str(job.id))
+
+
+@router.get("/{dataset_id}/usage", response_model=DatasetUsageResponse)
+def get_dataset_usage(dataset_id: str, user: CurrentUser = Depends(get_current_user)) -> DatasetUsageResponse:
+    """Which experiments use this dataset (UX package, Datasets §2.2) —
+    the frontend calls this right before showing a Delete confirmation, to
+    decide between the plain confirm Modal (unused) and the strict
+    DELETE-typed one listing them (used)."""
+    from abkit.jobs import get_dataset_usage as _get_dataset_usage
+
+    return DatasetUsageResponse(experiments=_get_dataset_usage(user, dataset_id))
+
+
+@router.delete("/{dataset_id}", status_code=204)
+def delete_dataset(
+    dataset_id: str, body: DeleteDatasetRequest, user: CurrentUser = Depends(get_current_user),
+) -> None:
+    """Owner (uploaded_by) or Admin. confirm="DELETE" is only enforced when
+    the dataset is actually in use (abkit/jobs.py::run_delete_dataset raises
+    DatasetInUseError otherwise, mapped to 400 by backend/errors.py) — an
+    unused dataset deletes on a plain request, matching the two-tier
+    confirmation the frontend shows (UX package, Datasets §2.2)."""
+    from abkit.jobs import run_delete_dataset
+
+    run_delete_dataset(user, dataset_id, confirm=body.confirm)
+
+
+@router.patch("/{dataset_id}", response_model=PatchDatasetResponse)
+def patch_dataset(
+    dataset_id: str, body: PatchDatasetRequest,
+    user: CurrentUser = Depends(get_current_user),
+    runner: JobRunner = Depends(get_job_runner),
+) -> PatchDatasetResponse:
+    """Owner or Admin (UX package, Datasets §2.3). Edits `name` immediately;
+    for source='sql', a changed connection_id/sql_text also submits a
+    re-fetch job (same mechanism as Refresh) — job_id is set in the response
+    only when that happened, so the frontend knows whether to poll."""
+    from abkit.jobs import run_refresh_sql_dataset, run_update_dataset
+
+    result = run_update_dataset(
+        user, dataset_id, name=body.name, connection_id=body.connection_id, sql_text=body.sql_text,
+    )
+
+    job_id = None
+    if result["needs_refetch"]:
+        def _run(reporter) -> dict:
+            return run_refresh_sql_dataset(user, dataset_id, progress_callback=reporter.stage)
+
+        job = runner.submit("dataset_refresh", uuid_mod.UUID(user.id), _run)
+        job_id = str(job.id)
+
+    ds = DatasetRepo().get_by_id(uuid_mod.UUID(dataset_id))
+    exp_name_by_id = {e.id: e.name for e in ExperimentRepo().list_all()}
+    email_by_id = {u.id: u.email for u in UserRepo().list_all()}
+    connection_name_by_id = {c.id: c.display_name for c in DatabaseConnectionRepo().list_all()}
+    out = _to_dataset_out(ds, exp_name_by_id, email_by_id, connection_name_by_id)
+    return PatchDatasetResponse(dataset=out, job_id=job_id)

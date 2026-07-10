@@ -65,6 +65,21 @@ def register_exception_handlers(app: FastAPI) -> None:
         # а не сюда (см. backend/jobs/runner.py).
         return JSONResponse(status_code=404, content=_error_body("not_found", str(exc)))
 
+    from abkit.jobs import DatasetInUseError
+
+    @app.exception_handler(DatasetInUseError)
+    async def _handle_dataset_in_use_error(request: Request, exc: DatasetInUseError) -> JSONResponse:
+        # DELETE /datasets/{id} without confirm="DELETE" when experiments
+        # still use it (UX package, Datasets §2.2) — frontend shows the
+        # experiment list + requires typed DELETE, same discipline as
+        # DELETE /experiments/{name}.
+        return JSONResponse(
+            status_code=400,
+            content=_error_body(
+                "confirmation_required", str(exc), {"experiments": exc.experiment_names}
+            ),
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(

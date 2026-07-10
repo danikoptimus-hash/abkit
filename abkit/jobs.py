@@ -24,7 +24,7 @@ import pandas as pd
 
 from abkit.access import require_experiment_edit_access
 from abkit.analysis.results import AnalysisResults
-from abkit.auth.guards import CurrentUser, require_role
+from abkit.auth.guards import AuthError, CurrentUser, require_role
 from abkit.config import DesignConfig
 from abkit.experiment import Experiment
 from abkit.logging_config import get_logger
@@ -255,14 +255,54 @@ def run_delete_experiment(current_user: CurrentUser, name: str) -> None:
     )
 
 
-def run_delete_dataset(current_user: CurrentUser, dataset_id: str) -> None:
-    """Admin-only maintenance helper — datasets have no delete button in the
-    UI (dataset-centric model, CLAUDE.md: a dataset is meant to be a durable,
-    reusable artifact), this exists only for cleaning up orphaned datasets
-    (not linked to any experiment via the legacy experiment_id or via
-    experiment_datasets) via the same DELETE-through-service-functions
-    discipline as run_delete_experiment, not raw SQL."""
-    require_role(current_user, "admin")
+class DatasetInUseError(Exception):
+    """Raised by run_delete_dataset when the dataset is used by at least one
+    experiment and the caller didn't pass confirm="DELETE" — UX package,
+    Datasets п.2.2: unused datasets get a plain confirm Modal, used ones get
+    a strict Modal listing the experiments and requiring typed DELETE."""
+
+    def __init__(self, experiment_names: list[str]) -> None:
+        self.experiment_names = experiment_names
+        super().__init__(f"Dataset is used by experiments: {', '.join(experiment_names)}")
+
+
+def _experiment_names_using_dataset(ds) -> list[str]:
+    from abkit.db.repositories import ExperimentDatasetRepo, ExperimentRepo
+
+    exp_ids = set(ExperimentDatasetRepo().experiments_using_dataset(ds.id))
+    if ds.experiment_id:
+        exp_ids.add(ds.experiment_id)
+    if not exp_ids:
+        return []
+    experiments = ExperimentRepo().list_all()
+    return sorted(e.name for e in experiments if e.id in exp_ids)
+
+
+def get_dataset_usage(current_user: CurrentUser, dataset_id: str) -> list[str]:
+    """Which experiments use this dataset (via experiment_datasets, the
+    DB3 "actual use" link table, OR the legacy single-owner experiment_id) —
+    read-only, drives which Delete confirmation Modal the frontend shows."""
+    require_role(current_user, "viewer")
+    from abkit import storage
+    from abkit.db.repositories import DatasetRepo
+
+    ds = DatasetRepo().get_by_id(uuid_mod.UUID(dataset_id))
+    if ds is None:
+        raise storage.StorageError(f"Dataset '{dataset_id}' not found")
+    return _experiment_names_using_dataset(ds)
+
+
+def run_delete_dataset(current_user: CurrentUser, dataset_id: str, confirm: str | None = None) -> None:
+    """Owner (uploaded_by) or Admin — datasets have no owner_id-based access
+    grant system like experiments do, just a single uploader. Deleting a
+    dataset that's in use requires confirm="DELETE" (checked here, not just
+    in the router, so direct service-function calls stay safe too — DOCKER.md
+    §12's "Viewer can't mutate even via direct function call" discipline,
+    extended to this confirmation requirement). Deleting a dataset does NOT
+    break existing analysis results referencing it (analysis_results.dataset_id
+    is ON DELETE SET NULL, migration 0009) — results.json is self-sufficient,
+    results stay renderable, only the live "which dataset" lookup goes null."""
+    require_role(current_user, "viewer")
     from pathlib import Path
 
     from abkit import storage
@@ -272,6 +312,14 @@ def run_delete_dataset(current_user: CurrentUser, dataset_id: str) -> None:
     if ds is None:
         raise storage.StorageError(f"Dataset '{dataset_id}' not found")
 
+    is_owner = ds.uploaded_by is not None and str(ds.uploaded_by) == str(current_user.id)
+    if current_user.role != "admin" and not is_owner:
+        raise AuthError("You can only delete your own datasets (or contact an Admin)")
+
+    experiment_names = _experiment_names_using_dataset(ds)
+    if experiment_names and confirm != "DELETE":
+        raise DatasetInUseError(experiment_names)
+
     with _timed("delete_dataset", user=current_user.email, dataset=ds.filename):
         DatasetRepo().delete(ds.id)
         path = Path(ds.storage_path)
@@ -279,7 +327,63 @@ def run_delete_dataset(current_user: CurrentUser, dataset_id: str) -> None:
             path.unlink()
     _audit(
         current_user, "dataset.delete", object_type="dataset", object_id=str(ds.id), object_name=ds.filename,
+        details={"used_by_experiments": experiment_names} if experiment_names else None,
     )
+
+
+def run_update_dataset(
+    current_user: CurrentUser,
+    dataset_id: str,
+    *,
+    name: str | None = None,
+    connection_id: str | None = None,
+    sql_text: str | None = None,
+) -> dict[str, Any]:
+    """PATCH /datasets/{id} (UX package, Datasets п.2.3) — owner or admin,
+    same rule as delete. `name` (-> Dataset.filename) applies to any source.
+    `connection_id`/`sql_text` only apply to source='sql' — if either
+    actually changes, the DB row is updated here (synchronously) but the
+    re-fetch itself is NOT run here: the caller (router) submits it as a
+    background job reusing run_refresh_sql_dataset, which reads sql_text/
+    connection_id fresh off the row — already the new values by the time it
+    runs, so there's no separate "apply edited SQL" code path to keep in
+    sync. Returns {"needs_refetch": bool} so the router knows whether to
+    submit that job."""
+    require_role(current_user, "viewer")
+    from abkit import storage
+    from abkit.db.repositories import DatasetRepo
+
+    ds = DatasetRepo().get_by_id(uuid_mod.UUID(dataset_id))
+    if ds is None:
+        raise storage.StorageError(f"Dataset '{dataset_id}' not found")
+
+    is_owner = ds.uploaded_by is not None and str(ds.uploaded_by) == str(current_user.id)
+    if current_user.role != "admin" and not is_owner:
+        raise AuthError("You can only edit your own datasets (or contact an Admin)")
+
+    changes: dict[str, Any] = {}
+    needs_refetch = False
+
+    if name is not None and name.strip() and name.strip() != ds.filename:
+        DatasetRepo().rename(ds.id, name.strip())
+        changes["filename"] = {"old": ds.filename, "new": name.strip()}
+
+    if connection_id is not None or sql_text is not None:
+        if ds.source != "sql":
+            raise storage.StorageError(f"Dataset '{ds.filename}' was not created from SQL — cannot edit connection/SQL")
+        new_connection_id = uuid_mod.UUID(connection_id) if connection_id else ds.connection_id
+        new_sql = sql_text if sql_text is not None else ds.sql_text
+        if new_connection_id != ds.connection_id or new_sql != ds.sql_text:
+            DatasetRepo().update_sql_source(ds.id, connection_id=new_connection_id, sql_text=new_sql)
+            changes["sql_text"] = {"old": ds.sql_text, "new": new_sql}
+            needs_refetch = True
+
+    if changes:
+        _audit(
+            current_user, "dataset.update", object_type="dataset", object_id=str(ds.id),
+            object_name=ds.filename, details=changes,
+        )
+    return {"needs_refetch": needs_refetch}
 
 
 def run_update_experiment_properties(

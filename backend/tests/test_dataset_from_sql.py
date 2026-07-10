@@ -176,6 +176,62 @@ def test_preview_connection_sql_rejects_non_select(app_client, db_url, tmp_path,
     assert resp.status_code == 422
 
 
+def test_list_connection_schemas_includes_public(app_client, db_url, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _seed_table(db_url, n=5)
+    _login(app_client, role="admin")
+    conn_id = _create_connection(app_client, db_url)
+
+    resp = app_client.get(f"/api/v1/db-connections/{conn_id}/schemas")
+    assert resp.status_code == 200, resp.text
+    assert "public" in resp.json()["schemas"]
+
+
+def test_list_connection_tables_in_schema(app_client, db_url, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _seed_table(db_url, n=5)
+    _login(app_client, role="admin")
+    conn_id = _create_connection(app_client, db_url)
+
+    resp = app_client.get(f"/api/v1/db-connections/{conn_id}/schemas/public/tables")
+    assert resp.status_code == 200, resp.text
+    assert "from_sql_probe" in resp.json()["tables"]
+
+
+def test_list_connection_tables_cached_until_refresh(app_client, db_url, tmp_path, monkeypatch):
+    """60s TTL cache (UX-package, Datasets п.1.2) — a second call without
+    ?refresh=true returns the cached list even after a new table appears;
+    ?refresh=true (the selects' 🗘 button) bypasses it."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _seed_table(db_url, n=5)
+    _login(app_client, role="admin")
+    conn_id = _create_connection(app_client, db_url)
+
+    first = app_client.get(f"/api/v1/db-connections/{conn_id}/schemas/public/tables")
+    assert "brand_new_table" not in first.json()["tables"]
+
+    from sqlalchemy import create_engine
+    from sqlalchemy import text as sa_text
+
+    engine = create_engine(db_url, future=True)
+    with engine.begin() as conn:
+        conn.execute(sa_text("CREATE TABLE brand_new_table (id INT)"))
+    engine.dispose()
+
+    cached = app_client.get(f"/api/v1/db-connections/{conn_id}/schemas/public/tables")
+    assert "brand_new_table" not in cached.json()["tables"]
+
+    refreshed = app_client.get(f"/api/v1/db-connections/{conn_id}/schemas/public/tables?refresh=true")
+    assert "brand_new_table" in refreshed.json()["tables"]
+
+
+def test_list_connection_schemas_requires_editor(app_client, db_url, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client, role="viewer")
+    resp = app_client.get("/api/v1/db-connections/00000000-0000-0000-0000-000000000000/schemas")
+    assert resp.status_code == 403
+
+
 def test_refresh_sql_dataset(app_client, db_url, tmp_path, monkeypatch):
     monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
     _seed_table(db_url, n=50)

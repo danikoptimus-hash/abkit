@@ -1,16 +1,31 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Table, Drawer, Table as PreviewTable, Typography, Button, Space, message, Modal, Alert, Tooltip } from 'antd'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import {
+  Table, Drawer, Table as PreviewTable, Typography, Button, Space, message, Modal, Alert, Tooltip, Input, Select,
+} from 'antd'
+import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
 import { RelativeTime } from '../components/RelativeTime'
 import { SourceTag } from '../components/DatasetSelect'
 import { CreateDatasetModal } from './datasets/CreateDatasetModal'
+import { EditDatasetModal } from './datasets/EditDatasetModal'
 import { useAuth, hasMinRole } from '../auth/AuthContext'
 import type { components } from '../api/schema'
 
 type DatasetOut = components['schemas']['DatasetOut']
+
+// Live search (UX package, Datasets §3): filters as you type, no Enter
+// needed — a small local debounce since this codebase has no existing
+// shared debounce hook.
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs)
+    return () => clearTimeout(t)
+  }, [value, delayMs])
+  return debounced
+}
 
 // Shared by the table row's icon action and the preview drawer's labeled
 // button (UX-package, Datasets п.1.1a/1.1b) — same confirm+run+poll flow,
@@ -97,17 +112,126 @@ function RefreshDrawerButton({ dataset }: { dataset: DatasetOut }) {
   )
 }
 
+// UX package, Datasets §2.2: checks usage first (GET .../usage), THEN shows
+// one of two Modals — a plain confirm for an unused dataset, or a strict
+// one listing the referencing experiments and requiring the exact text
+// "DELETE" typed in, for a used one. The backend independently re-enforces
+// this (defense in depth — see abkit/jobs.py::run_delete_dataset), so a
+// stale usage check here can't bypass it, just show the wrong Modal once.
+function DeleteDatasetAction({ dataset, onDeleted }: { dataset: DatasetOut; onDeleted: () => void }) {
+  const [deleting, setDeleting] = useState(false)
+  const [confirmModal, setConfirmModal] = useState<{ experiments: string[] } | null>(null)
+  const [typedConfirm, setTypedConfirm] = useState('')
+
+  const doDelete = async (confirm?: string) => {
+    setDeleting(true)
+    try {
+      const { error } = await apiClient.DELETE('/api/v1/datasets/{dataset_id}', {
+        params: { path: { dataset_id: dataset.id } },
+        body: confirm ? { confirm } : {},
+      })
+      if (error) throw new Error(errorMessage(error))
+      message.success(`Deleted ${dataset.filename}`)
+      setConfirmModal(null)
+      setTypedConfirm('')
+      onDeleted()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Failed to delete dataset')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const startDelete = async () => {
+    setDeleting(true)
+    try {
+      const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/usage', {
+        params: { path: { dataset_id: dataset.id } },
+      })
+      if (error) throw new Error(errorMessage(error))
+      if (data.experiments.length === 0) {
+        setDeleting(false)
+        Modal.confirm({
+          title: `Delete dataset ${dataset.filename}?`,
+          content: 'This cannot be undone.',
+          okText: 'Delete',
+          okButtonProps: { danger: true },
+          onOk: () => doDelete(),
+        })
+      } else {
+        setDeleting(false)
+        setConfirmModal({ experiments: data.experiments })
+      }
+    } catch (e) {
+      setDeleting(false)
+      message.error(e instanceof Error ? e.message : 'Failed to check dataset usage')
+    }
+  }
+
+  return (
+    <>
+      <Tooltip title="Delete">
+        <Button
+          className="hover-actions"
+          danger
+          size="small"
+          aria-label="Delete"
+          icon={<DeleteOutlined />}
+          loading={deleting}
+          onClick={(e) => {
+            e.stopPropagation()
+            startDelete()
+          }}
+        />
+      </Tooltip>
+      <Modal
+        title={`Delete dataset ${dataset.filename}?`}
+        open={confirmModal !== null}
+        onCancel={() => {
+          setConfirmModal(null)
+          setTypedConfirm('')
+        }}
+        onOk={() => doDelete('DELETE')}
+        okText="Delete"
+        okButtonProps={{ danger: true, disabled: typedConfirm !== 'DELETE', loading: deleting }}
+        destroyOnHidden
+      >
+        <Typography.Paragraph>
+          Used by experiments: <strong>{confirmModal?.experiments.join(', ')}</strong>. Deleting this dataset
+          will not affect their existing analysis results, but their data source will show as deleted.
+        </Typography.Paragraph>
+        <Typography.Paragraph>
+          Type <Typography.Text code>DELETE</Typography.Text> to confirm.
+        </Typography.Paragraph>
+        <Input value={typedConfirm} onChange={(e) => setTypedConfirm(e.target.value)} placeholder="DELETE" />
+      </Modal>
+    </>
+  )
+}
+
 export function DatasetsPage() {
   const [page, setPage] = useState(1)
+  const [q, setQ] = useState('')
+  const [source, setSource] = useState<string | undefined>(undefined)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<DatasetOut | null>(null)
   const pageSize = 20
+  const debouncedQ = useDebouncedValue(q, 300)
+  const queryClient = useQueryClient()
+
+  // Reset to page 1 whenever the search/filter changes — otherwise a
+  // narrowed result set can leave the user stranded on a page that no
+  // longer exists.
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedQ, source])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['datasets', page],
+    queryKey: ['datasets', page, debouncedQ, source],
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets', {
-        params: { query: { page, page_size: pageSize } },
+        params: { query: { page, page_size: pageSize, q: debouncedQ || undefined, source } },
       })
       if (error) throw new Error(errorMessage(error))
       return data
@@ -129,6 +253,14 @@ export function DatasetsPage() {
   const previewedDataset = data?.items.find((d) => d.id === previewId)
   const { user } = useAuth()
   const canRefresh = hasMinRole(user, 'editor')
+  const isAdmin = hasMinRole(user, 'admin')
+  const canEditDataset = (record: DatasetOut) => isAdmin || (!!user && record.uploaded_by === user.id)
+
+  const invalidateAfterDelete = () => {
+    queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
+    if (previewId) setPreviewId(null)
+  }
 
   return (
     <div>
@@ -137,6 +269,28 @@ export function DatasetsPage() {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           Dataset
         </Button>
+      </Space>
+      <Space style={{ marginBottom: 16 }}>
+        <Input
+          allowClear
+          placeholder="Search datasets..."
+          style={{ width: 280 }}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <Select
+          allowClear
+          aria-label="Source"
+          placeholder="Source"
+          style={{ width: 140 }}
+          value={source}
+          onChange={setSource}
+          options={[
+            { value: 'upload', label: 'Upload' },
+            { value: 'sql', label: 'SQL' },
+            { value: 'demo', label: 'Demo' },
+          ]}
+        />
       </Space>
       <Table
         rowKey="id"
@@ -158,13 +312,32 @@ export function DatasetsPage() {
           {
             title: 'Actions',
             key: 'actions',
-            render: (_, record: DatasetOut) =>
-              record.source === 'sql' && canRefresh ? <RefreshRowAction dataset={record} /> : null,
+            render: (_, record: DatasetOut) => (
+              <Space size={4}>
+                {record.source === 'sql' && canRefresh && <RefreshRowAction dataset={record} />}
+                {canEditDataset(record) && (
+                  <Tooltip title="Edit">
+                    <Button
+                      className="hover-actions"
+                      size="small"
+                      aria-label="Edit"
+                      icon={<EditOutlined />}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setEditTarget(record)
+                      }}
+                    />
+                  </Tooltip>
+                )}
+                {canEditDataset(record) && <DeleteDatasetAction dataset={record} onDeleted={invalidateAfterDelete} />}
+              </Space>
+            ),
           },
         ]}
       />
 
       <CreateDatasetModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <EditDatasetModal dataset={editTarget} open={editTarget !== null} onClose={() => setEditTarget(null)} />
 
       <Drawer
         title={preview?.filename ?? 'Preview'}

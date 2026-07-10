@@ -272,7 +272,9 @@ def test_run_validate_aa_editor_allowed(users):
 # --------------------------------------------------------------------------
 
 
-def test_run_delete_dataset_editor_blocked(users, tmp_path):
+def test_run_delete_dataset_owner_editor_allowed(users, tmp_path):
+    """UX package, Datasets §2.2: owner (uploaded_by) can delete their own
+    dataset even without admin — this replaced the earlier admin-only rule."""
     from abkit.db.repositories import DatasetRepo
 
     f = tmp_path / "orphan.csv"
@@ -281,8 +283,22 @@ def test_run_delete_dataset_editor_blocked(users, tmp_path):
         kind="pre_design", filename="orphan.csv", n_rows=1, columns=["a", "b"],
         storage_path=str(f), sha256="x", uploaded_by=uuid.UUID(users["editor"].id),
     )
+    jobs.run_delete_dataset(users["editor"], str(ds_id))
+    assert DatasetRepo().get_by_id(ds_id) is None
+    assert not f.exists()
+
+
+def test_run_delete_dataset_non_owner_editor_blocked(users, tmp_path):
+    from abkit.db.repositories import DatasetRepo
+
+    f = tmp_path / "orphan_other.csv"
+    f.write_text("a,b\n1,2\n")
+    ds_id = DatasetRepo().create(
+        kind="pre_design", filename="orphan_other.csv", n_rows=1, columns=["a", "b"],
+        storage_path=str(f), sha256="x", uploaded_by=uuid.UUID(users["editor"].id),
+    )
     with pytest.raises(AuthError):
-        jobs.run_delete_dataset(users["editor"], str(ds_id))
+        jobs.run_delete_dataset(users["other_editor"], str(ds_id))
     assert DatasetRepo().get_by_id(ds_id) is not None
     assert f.exists()
 

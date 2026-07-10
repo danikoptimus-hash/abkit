@@ -89,6 +89,7 @@ class DbExperimentStore:
         report_path: Path,
         *,
         dataset_id: uuid_mod.UUID | None = None,
+        dataset_filename: str | None = None,
         created_by: uuid_mod.UUID | None = None,
     ) -> None:
         """Пишет строку в analysis_results (jsonb с results.json целиком) —
@@ -96,7 +97,10 @@ class DbExperimentStore:
         сформированы, для трассируемости (какие результаты когда получены).
         Каждый вызов — новая строка (история прогонов не затирается, UX-пакет
         п.3: "Re-run analysis"); dataset_id/created_by нужны для отображения
-        "Analyzed N ago with dataset X (run #K)" на вкладке Results."""
+        "Analyzed N ago with dataset X (run #K)" на вкладке Results.
+        dataset_filename — замороженный снимок имени файла (миграция 0009):
+        переживает удаление самого датасета (dataset_id тогда обнулится через
+        ON DELETE SET NULL), см. AnalysisResult в abkit/db/models.py."""
         import json
 
         exp_row = self.experiments.get_by_name(name)
@@ -104,7 +108,7 @@ class DbExperimentStore:
             raise DbStoreError(f"Experiment '{name}' not found")
         self.results.create(
             experiment_id=exp_row.id, results=json.loads(results_json), report_path=str(report_path),
-            dataset_id=dataset_id, created_by=created_by,
+            dataset_id=dataset_id, dataset_filename=dataset_filename, created_by=created_by,
         )
 
     def occupied_units(

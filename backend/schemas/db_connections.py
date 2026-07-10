@@ -77,6 +77,14 @@ class TestDraftConnectionRequest(BaseModel):
     ssl: bool = False
 
 
+class SchemasResponse(BaseModel):
+    schemas: list[str]
+
+
+class TablesResponse(BaseModel):
+    tables: list[str]
+
+
 class SqlPreviewRequest(BaseModel):
     sql: str
 

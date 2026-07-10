@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Modal, Tabs, Upload, Button, Alert, Select, Input, Table, Progress, Typography, Spin } from 'antd'
-import { InboxOutlined } from '@ant-design/icons'
+import { useRef, useState } from 'react'
+import { Modal, Tabs, Upload, Button, Alert, Select, Input, Table, Progress, Typography, Spin, Space, Tooltip } from 'antd'
+import { InboxOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UploadProps } from 'antd'
 import { apiClient, errorMessage, toFormData } from '../../api/client'
@@ -61,6 +61,8 @@ function UploadTab({ onDone }: { onDone: () => void }) {
 
 function FromSqlTab({ onDone }: { onDone: () => void }) {
   const [connectionId, setConnectionId] = useState<string | undefined>(undefined)
+  const [schema, setSchema] = useState<string | undefined>(undefined)
+  const [table, setTable] = useState<string | undefined>(undefined)
   const [sql, setSql] = useState('')
   const [name, setName] = useState('')
   const [previewing, setPreviewing] = useState(false)
@@ -76,6 +78,69 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
       return data ?? []
     },
   })
+
+  // Schema/Table pickers (UX package, Datasets п.1) — optional, purely a
+  // convenience for filling in the SQL box. "SQL is the source of truth" —
+  // selecting a table only overwrites `sql` when it's still exactly what a
+  // previous selection generated (or empty); once the user edits it by
+  // hand, further schema/table changes stop clobbering their edits.
+  const lastAutoFilledSql = useRef<string | null>(null)
+  const forceRefreshSchemas = useRef(false)
+  const forceRefreshTables = useRef(false)
+
+  const {
+    data: schemas, isFetching: schemasLoading, refetch: refetchSchemas,
+  } = useQuery({
+    queryKey: ['db-connection-schemas', connectionId],
+    enabled: !!connectionId,
+    queryFn: async () => {
+      const refresh = forceRefreshSchemas.current
+      forceRefreshSchemas.current = false
+      const { data, error } = await apiClient.GET('/api/v1/db-connections/{conn_id}/schemas', {
+        params: { path: { conn_id: connectionId! }, query: { refresh } },
+      })
+      if (error) throw new Error(errorMessage(error))
+      return data.schemas
+    },
+  })
+
+  const {
+    data: tables, isFetching: tablesLoading, refetch: refetchTables,
+  } = useQuery({
+    queryKey: ['db-connection-tables', connectionId, schema],
+    enabled: !!connectionId && !!schema,
+    queryFn: async () => {
+      const refresh = forceRefreshTables.current
+      forceRefreshTables.current = false
+      const { data, error } = await apiClient.GET('/api/v1/db-connections/{conn_id}/schemas/{schema}/tables', {
+        params: { path: { conn_id: connectionId!, schema: schema! }, query: { refresh } },
+      })
+      if (error) throw new Error(errorMessage(error))
+      return data.tables
+    },
+  })
+
+  const handleConnectionChange = (value: string) => {
+    setConnectionId(value)
+    setSchema(undefined)
+    setTable(undefined)
+  }
+
+  const handleSchemaChange = (value: string | undefined) => {
+    setSchema(value)
+    setTable(undefined)
+  }
+
+  const handleTableChange = (value: string | undefined) => {
+    setTable(value)
+    if (value && schema) {
+      const generated = `SELECT * FROM "${schema}"."${value}"`
+      if (sql.trim() === '' || sql === lastAutoFilledSql.current) {
+        setSql(generated)
+        lastAutoFilledSql.current = generated
+      }
+    }
+  }
 
   const runPreview = async () => {
     if (!connectionId || !sql.trim()) return
@@ -121,15 +186,62 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
       </Typography.Text>
       <Select
         style={{ width: '100%', marginBottom: 12 }}
+        aria-label="from-sql-connection-select"
         placeholder={connectionsLoading ? 'Loading...' : 'Select a database connection'}
         loading={connectionsLoading}
         value={connectionId}
-        onChange={setConnectionId}
+        onChange={handleConnectionChange}
         options={(connections ?? []).map((c) => ({ value: c.id, label: `${c.display_name} (${c.engine})` }))}
         notFoundContent={
           connectionsLoading ? undefined : 'No database connections configured — ask an admin to add one in Settings'
         }
       />
+
+      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+        Schema &amp; table <Typography.Text type="secondary" style={{ fontSize: 12 }}>(optional — fills in the SQL box below)</Typography.Text>
+      </Typography.Text>
+      <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
+        <Select
+          style={{ width: '45%' }}
+          aria-label="from-sql-schema-select"
+          showSearch
+          allowClear
+          disabled={!connectionId}
+          loading={schemasLoading}
+          placeholder="Schema"
+          value={schema}
+          onChange={handleSchemaChange}
+          options={(schemas ?? []).map((s) => ({ value: s, label: s }))}
+        />
+        <Select
+          style={{ width: '45%' }}
+          aria-label="from-sql-table-select"
+          showSearch
+          allowClear
+          disabled={!schema}
+          loading={tablesLoading}
+          placeholder="Table"
+          value={table}
+          onChange={handleTableChange}
+          options={(tables ?? []).map((t) => ({ value: t, label: t }))}
+        />
+        <Tooltip title="Refresh schema/table list">
+          <Button
+            style={{ width: '10%' }}
+            icon={<ReloadOutlined />}
+            disabled={!connectionId}
+            onClick={() => {
+              if (schema) {
+                forceRefreshTables.current = true
+                refetchTables()
+              } else {
+                forceRefreshSchemas.current = true
+                refetchSchemas()
+              }
+            }}
+          />
+        </Tooltip>
+      </Space.Compact>
 
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
         SQL (SELECT only)

@@ -437,3 +437,36 @@ def test_analyze_unknown_experiment_404(app_client, tmp_path, monkeypatch):
         "/api/v1/experiments/does_not_exist/analyze", json={"dataset_id": dataset_id},
     )
     assert resp.status_code == 404
+
+
+def test_deleting_analyzed_dataset_leaves_results_intact(app_client, tmp_path, monkeypatch):
+    """UX package, Datasets §2.2: deleting a dataset must not be blocked by
+    — nor break — the results of experiments that already analyzed it
+    (results.json is self-sufficient; migration 0009 SET NULLs the live FK
+    and dataset_filename is a frozen snapshot, not a live lookup)."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client, email="admin_analyze@co.com", role="admin")
+    name = "analyzed_then_deleted_exp"
+    _design_experiment(app_client, name)
+
+    post_dataset_id = _upload_csv(app_client, _post_csv())
+    resp = app_client.post(
+        f"/api/v1/experiments/{name}/analyze", json={"dataset_id": post_dataset_id},
+    )
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "completed", job
+
+    before = app_client.get(f"/api/v1/experiments/{name}/results")
+    assert before.status_code == 200
+    assert before.json()["run_meta"]["dataset_filename"] == "data.csv"
+
+    delete_resp = app_client.request(
+        "DELETE", f"/api/v1/datasets/{post_dataset_id}", json={"confirm": "DELETE"}
+    )
+    assert delete_resp.status_code == 204, delete_resp.text
+
+    after = app_client.get(f"/api/v1/experiments/{name}/results")
+    assert after.status_code == 200
+    # frozen at analyze time — survives the dataset row itself being gone
+    assert after.json()["run_meta"]["dataset_filename"] == "data.csv"
+    assert after.json()["results"] == before.json()["results"]
