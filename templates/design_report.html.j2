@@ -58,6 +58,17 @@
   </table>
 </section>
 
+<!-- design_report.html is written once at design/redesign time, before flow
+     images exist (uploaded in a separate step right after — see
+     abkit/jobs.py::run_set_flow_image_group_order,
+     Step4Review.tsx::saveFlowImages) — that later step patches the saved
+     HTML in place, replacing everything between this partial's own
+     flow-images-section:start/:end comments (abkit/viz/report.py::
+     render_flow_images_section), rather than a full report re-render
+     (which would need the DesignReport object, only available mid-
+     Experiment.design(), not reloadable afterward). -->
+{% include "_flow_images_section.html.j2" %}
+
 {% if strata_nan_rows %}
 <section id="section-strata-nan">
   <h2>Missing values in strata</h2>

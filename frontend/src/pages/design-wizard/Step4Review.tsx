@@ -1,10 +1,67 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Typography, Button, Descriptions, Alert, Progress, Space, Tag, message } from 'antd'
-import { apiClient, errorMessage } from '../../api/client'
+import { apiClient, errorMessage, toFormData } from '../../api/client'
+import { getColumns } from './FlowImagesSection'
 import { buildDesignConfig, buildExternalDesignConfig, groupsToApi, metricsToApi } from './types'
 import type { WizardState } from './types'
 import { PRODUCT_NAME } from '../../branding'
+
+// Stage 4 (variant flow images): applies the wizard's staged flow-image
+// state to the now-created/redesigned experiment. New images (kind='new',
+// still a local File) are uploaded first; the resulting id, together with
+// any kept 'existing' ids, becomes the final per-group order call — which
+// also deletes (DB row + file) any of that group's images the user removed
+// in the wizard, since it never reappears in that final id list (see
+// abkit/db/repositories.py::FlowImageRepo.set_group_order). Groups that HAD
+// images at wizard-open time but no longer have a column at all (the user
+// deleted the whole column) still get an empty order call, so their images
+// don't become permanently orphaned. Best-effort, same as saveHypothesis
+// below — the design/redesign itself already succeeded by the time this
+// runs, so a failure here shouldn't block navigation.
+async function saveFlowImages(experimentName: string, state: WizardState): Promise<void> {
+  try {
+    const columns = getColumns(state).filter((c) => c.groupName.trim())
+    const coveredGroupNames = new Set(columns.map((c) => c.groupName))
+
+    for (const column of columns) {
+      const orderedIds: string[] = []
+      for (const image of column.images) {
+        if (image.kind === 'existing') {
+          orderedIds.push(image.id)
+          continue
+        }
+        if (!image.file) continue
+        const { data, error } = await apiClient.POST('/api/v1/experiments/{name}/flow-images', {
+          params: { path: { name: experimentName } },
+          body: toFormData({
+            group_name: column.groupName,
+            flow_title: column.flowTitle,
+            file: image.file,
+          }) as unknown as { group_name: string; flow_title: string; file: string },
+        })
+        if (error) throw new Error(errorMessage(error))
+        orderedIds.push(data.id)
+      }
+      const { error } = await apiClient.PUT('/api/v1/experiments/{name}/flow-images/order', {
+        params: { path: { name: experimentName } },
+        body: { group_name: column.groupName, flow_title: column.flowTitle, image_ids: orderedIds },
+      })
+      if (error) throw new Error(errorMessage(error))
+    }
+
+    for (const groupName of state.originalFlowGroupNames) {
+      if (coveredGroupNames.has(groupName)) continue
+      const { error } = await apiClient.PUT('/api/v1/experiments/{name}/flow-images/order', {
+        params: { path: { name: experimentName } },
+        body: { group_name: groupName, flow_title: '', image_ids: [] },
+      })
+      if (error) throw new Error(errorMessage(error))
+    }
+  } catch {
+    message.warning('Variant flow images could not be saved automatically — retry from Redesign.')
+  }
+}
 
 // The wizard's optional Hypothesis field (5-item follow-up п.14) saves into
 // the experiment's existing Hypothesis markdown block — every experiment
@@ -81,6 +138,11 @@ export function Step4Review({ state, redesignName }: Props) {
         if (experimentName) {
           if (state.hypothesis.trim()) {
             await saveHypothesis(experimentName, state.hypothesis.trim())
+          }
+          const hasFlowImageWork =
+            getColumns(state).some((c) => c.images.length > 0) || state.originalFlowGroupNames.length > 0
+          if (hasFlowImageWork) {
+            await saveFlowImages(experimentName, state)
           }
           navigate(`/experiments/${experimentName}`)
         }

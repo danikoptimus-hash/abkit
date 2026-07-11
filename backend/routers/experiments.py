@@ -17,12 +17,12 @@ from typing import Any
 from urllib.parse import quote
 
 import pandas as pd
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from abkit.auth.guards import CurrentUser
 from abkit.dataset_files import read_dataset_file
-from abkit.db.repositories import AuditRepo, BlockRepo, DatasetRepo, ExperimentRepo, UserRepo
+from abkit.db.repositories import AuditRepo, BlockRepo, DatasetRepo, ExperimentRepo, FlowImageRepo, UserRepo
 from abkit.db.store import DbExperimentStore
 from backend.deps import get_current_user, get_job_runner, require_min_role
 from backend.errors import APIError
@@ -30,6 +30,7 @@ from backend.jobs.runner import JobRunner
 from backend.schemas.blocks import BlockIn, BlockOut
 from backend.schemas.datasets import DatasetOut
 from backend.schemas.design import DesignRequest, JobAccepted
+from backend.schemas.flow_images import FlowImageOut, SetFlowImageGroupOrderRequest
 from backend.schemas.experiments import (
     REPORT_FILENAMES,
     AnalyzeDemoRequest,
@@ -605,6 +606,76 @@ def put_blocks(
         )
         for b in blocks
     ]
+
+
+def _to_flow_image_out(img) -> FlowImageOut:
+    return FlowImageOut(
+        id=str(img.id), group_name=img.group_name, flow_title=img.flow_title,
+        position=img.position, uploaded_at=img.uploaded_at,
+    )
+
+
+_FLOW_IMAGE_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
+
+
+# Stage 4 (CLAUDE.md, variant flow images): reachable only through Redesign
+# (frontend gate, same as the rest of the design surface) — the endpoints
+# themselves are gated identically to /blocks (edit-access for mutation,
+# visibility for reads), not a separate permission tier.
+@router.get("/{name}/flow-images", response_model=list[FlowImageOut])
+def get_flow_images(name: str, user: CurrentUser = Depends(get_current_user)) -> list[FlowImageOut]:
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    images = FlowImageRepo().list_for_experiment(exp.id)
+    return [_to_flow_image_out(i) for i in images]
+
+
+@router.get("/{name}/flow-images/{image_id}/file")
+def get_flow_image_file(name: str, image_id: str, user: CurrentUser = Depends(get_current_user)) -> Response:
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    image = FlowImageRepo().get_by_id(uuid_mod.UUID(image_id))
+    if image is None or image.experiment_id != exp.id:
+        raise APIError(404, "not_found", f"Flow image '{image_id}' not found")
+    path = Path(image.file_path)
+    if not path.exists():
+        raise APIError(404, "not_found", "Flow image file is missing on disk")
+    media_type = _FLOW_IMAGE_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
+    return Response(content=path.read_bytes(), media_type=media_type)
+
+
+@router.post("/{name}/flow-images", response_model=FlowImageOut, status_code=201)
+def post_flow_image(
+    name: str,
+    group_name: str = Form(...),
+    flow_title: str = Form(default=""),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
+) -> FlowImageOut:
+    from abkit.flow_images import FlowImageError
+    from abkit.jobs import run_upload_flow_image
+
+    raw = file.file.read()
+    try:
+        image = run_upload_flow_image(user, name, group_name, flow_title, raw)
+    except FlowImageError as e:
+        raise APIError(400, "invalid_flow_image", str(e)) from e
+    return _to_flow_image_out(image)
+
+
+@router.delete("/{name}/flow-images/{image_id}", status_code=204)
+def delete_flow_image(name: str, image_id: str, user: CurrentUser = Depends(get_current_user)) -> None:
+    from abkit.jobs import run_delete_flow_image
+
+    run_delete_flow_image(user, name, image_id)
+
+
+@router.put("/{name}/flow-images/order", response_model=list[FlowImageOut])
+def put_flow_image_order(
+    name: str, body: SetFlowImageGroupOrderRequest, user: CurrentUser = Depends(get_current_user),
+) -> list[FlowImageOut]:
+    from abkit.jobs import run_set_flow_image_group_order
+
+    images = run_set_flow_image_group_order(user, name, body.group_name, body.flow_title, body.image_ids)
+    return [_to_flow_image_out(i) for i in images]
 
 
 def _load_dataset_df(dataset_id: str, unit_col: str | None = None) -> pd.DataFrame:

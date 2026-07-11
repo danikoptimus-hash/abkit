@@ -433,6 +433,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/experiments/{name}/flow-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Flow Images */
+        get: operations["get_flow_images_api_v1_experiments__name__flow_images_get"];
+        put?: never;
+        /** Post Flow Image */
+        post: operations["post_flow_image_api_v1_experiments__name__flow_images_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/experiments/{name}/flow-images/{image_id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Flow Image File */
+        get: operations["get_flow_image_file_api_v1_experiments__name__flow_images__image_id__file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/experiments/{name}/flow-images/{image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Flow Image */
+        delete: operations["delete_flow_image_api_v1_experiments__name__flow_images__image_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/experiments/{name}/flow-images/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Flow Image Order */
+        put: operations["put_flow_image_order_api_v1_experiments__name__flow_images_order_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/experiments/{name}/redesign": {
         parameters: {
             query?: never;
@@ -1223,6 +1292,18 @@ export interface components {
              */
             updated_at: string;
         };
+        /** Body_post_flow_image_api_v1_experiments__name__flow_images_post */
+        Body_post_flow_image_api_v1_experiments__name__flow_images_post: {
+            /** Group Name */
+            group_name: string;
+            /**
+             * Flow Title
+             * @default
+             */
+            flow_title: string;
+            /** File */
+            file: string;
+        };
         /** Body_upload_dataset_api_v1_datasets_post */
         Body_upload_dataset_api_v1_datasets_post: {
             /**
@@ -1784,6 +1865,22 @@ export interface components {
             /** Size Kb */
             size_kb: number;
         };
+        /** FlowImageOut */
+        FlowImageOut: {
+            /** Id */
+            id: string;
+            /** Group Name */
+            group_name: string;
+            /** Flow Title */
+            flow_title: string;
+            /** Position */
+            position: number;
+            /**
+             * Uploaded At
+             * Format: date-time
+             */
+            uploaded_at: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2021,6 +2118,18 @@ export interface components {
         SetExperimentTagsRequest: {
             /** Tag Ids */
             tag_ids: string[];
+        };
+        /** SetFlowImageGroupOrderRequest */
+        SetFlowImageGroupOrderRequest: {
+            /** Group Name */
+            group_name: string;
+            /**
+             * Flow Title
+             * @default
+             */
+            flow_title: string;
+            /** Image Ids */
+            image_ids: string[];
         };
         /** SqlPreviewRequest */
         SqlPreviewRequest: {
@@ -3057,6 +3166,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BlockOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_flow_images_api_v1_experiments__name__flow_images_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowImageOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_flow_image_api_v1_experiments__name__flow_images_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_post_flow_image_api_v1_experiments__name__flow_images_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowImageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_flow_image_file_api_v1_experiments__name__flow_images__image_id__file_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                image_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_flow_image_api_v1_experiments__name__flow_images__image_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                image_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_flow_image_order_api_v1_experiments__name__flow_images_order_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetFlowImageGroupOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlowImageOut"][];
                 };
             };
             /** @description Validation Error */

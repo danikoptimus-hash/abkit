@@ -23,6 +23,8 @@ const INITIAL_STATE: WizardState = {
     { id: nextId('group'), name: 'control', prop: 0.5, description: '' },
     { id: nextId('group'), name: 'treatment', prop: 0.5, description: '' },
   ],
+  flowColumns: [],
+  originalFlowGroupNames: [],
   metrics: [{ id: nextId('metric'), name: '', type: 'continuous', role: 'primary', preCol: null, num: null, den: null }],
   strata: [],
   nanStrategy: 'separate_stratum',
@@ -83,6 +85,37 @@ function useRedesignPrefill(redesignName: string | undefined, setState: (updater
           params: { path: { dataset_id: dsInfo.id }, query: { rows: 20 } },
         })
         const previewRows = preview?.rows ?? []
+
+        // Stage 4: existing flow images (editable only via Redesign) —
+        // grouped by group_name, one wizard column per group in config.groups'
+        // order (default column i -> group i, per CLAUDE.md item 4.2), each
+        // pre-populated with that group's images (kind='existing', already
+        // ordered by position) and flow_title (denormalized per-row, so any
+        // one row in the group carries it).
+        const { data: existingImages } = await apiClient.GET('/api/v1/experiments/{name}/flow-images', {
+          params: { path: { name: redesignName } },
+        })
+        const configGroups = wizardStateFromConfig(exp.config as unknown as DesignConfig).groups ?? []
+        const imagesByGroup = new Map<string, typeof existingImages>()
+        for (const img of existingImages ?? []) {
+          const list = imagesByGroup.get(img.group_name) ?? []
+          list.push(img)
+          imagesByGroup.set(img.group_name, list)
+        }
+        const flowColumns = configGroups.map((g) => {
+          const groupImages = (imagesByGroup.get(g.name) ?? []).slice().sort((a, b) => a.position - b.position)
+          return {
+            id: nextId('flowcol'),
+            groupName: g.name,
+            flowTitle: groupImages[0]?.flow_title ?? '',
+            images: groupImages.map((img) => ({
+              id: img.id,
+              kind: 'existing' as const,
+              previewUrl: `/api/v1/experiments/${redesignName}/flow-images/${img.id}/file`,
+            })),
+          }
+        })
+
         if (cancelled) return
         setState((prev) => ({
           ...prev,
@@ -92,6 +125,8 @@ function useRedesignPrefill(redesignName: string | undefined, setState: (updater
           nRows: dsInfo.n_rows,
           previewRows,
           ...wizardStateFromConfig(exp.config as unknown as DesignConfig),
+          flowColumns,
+          originalFlowGroupNames: [...imagesByGroup.keys()],
         }))
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load experiment for redesign')

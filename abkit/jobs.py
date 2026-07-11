@@ -839,3 +839,129 @@ def run_delete_tag(current_user: CurrentUser, tag_id: str) -> int:
         details={"affected_experiments": affected},
     )
     return affected
+
+
+def run_upload_flow_image(
+    current_user: CurrentUser, name: str, group_name: str, flow_title: str, raw: bytes
+) -> Any:
+    """Stage 4 (CLAUDE.md, variant flow images) — same edit-access gate as
+    Redesign/blocks/tags (owner/access-editor/Admin). Content-sniffed and
+    re-saved through Pillow (abkit/flow_images.py) rather than trusted by
+    filename/Content-Type; FlowImageError propagates as-is, the router maps
+    it to a 400."""
+    from abkit.db.repositories import FlowImageRepo
+    from abkit.db.store import DbExperimentStore
+    from abkit.flow_images import MAX_IMAGES_PER_GROUP, FlowImageError, validate_and_resave
+
+    exp_row = _get_experiment_row(name)
+    require_experiment_edit_access(current_user, exp_row)
+
+    existing_count = FlowImageRepo().count_for_group(exp_row.id, group_name)
+    if existing_count >= MAX_IMAGES_PER_GROUP:
+        raise FlowImageError(f"Group '{group_name}' already has the maximum of {MAX_IMAGES_PER_GROUP} images")
+
+    dest_stem = DbExperimentStore().data_dir / name / "flow_images" / uuid_mod.uuid4().hex
+    with _timed("upload_flow_image", user=current_user.email, experiment=name, group=group_name):
+        dest_path = validate_and_resave(raw, dest_stem)
+        image = FlowImageRepo().create(
+            experiment_id=exp_row.id, group_name=group_name, flow_title=flow_title,
+            file_path=str(dest_path), uploaded_by=uuid_mod.UUID(current_user.id),
+        )
+    _audit(
+        current_user, "flow_image.upload", object_type="experiment", object_id=str(exp_row.id),
+        object_name=name, details={"group_name": group_name, "image_id": str(image.id)},
+    )
+    return image
+
+
+def run_delete_flow_image(current_user: CurrentUser, name: str, image_id: str) -> None:
+    """DELETE /experiments/{name}/flow-images/{id} — same edit-access gate as
+    upload. Unlinks the file too, unlike run_delete_dataset's SET NULL-based
+    "never touch the file" discipline — flow images are part of the test,
+    not an independent entity (see ExperimentFlowImage's docstring)."""
+    from pathlib import Path
+
+    from abkit import storage
+    from abkit.db.repositories import FlowImageRepo
+
+    exp_row = _get_experiment_row(name)
+    require_experiment_edit_access(current_user, exp_row)
+
+    parsed_id = uuid_mod.UUID(image_id)
+    image = FlowImageRepo().get_by_id(parsed_id)
+    if image is None or image.experiment_id != exp_row.id:
+        raise storage.StorageError(f"Flow image '{image_id}' not found")
+
+    with _timed("delete_flow_image", user=current_user.email, experiment=name):
+        file_path = FlowImageRepo().delete(parsed_id)
+        if file_path:
+            Path(file_path).unlink(missing_ok=True)
+    _audit(
+        current_user, "flow_image.delete", object_type="experiment", object_id=str(exp_row.id),
+        object_name=name, details={"group_name": image.group_name, "image_id": image_id},
+    )
+
+
+def run_set_flow_image_group_order(
+    current_user: CurrentUser, name: str, group_name: str, flow_title: str, image_ids: list[str]
+) -> Any:
+    """PUT /experiments/{name}/flow-images/order — final-submit reconciliation
+    for one wizard column (abkit/db/repositories.py::FlowImageRepo.set_group_order):
+    sets flow_title on every surviving image, position from image_ids' order,
+    deletes (DB row + file) any of the group's existing images the caller
+    didn't include — the wizard's thumbnail delete/reorder actions are
+    deferred to this one call at Redesign submit, not applied live."""
+    from pathlib import Path
+
+    from abkit.db.repositories import FlowImageRepo
+
+    exp_row = _get_experiment_row(name)
+    require_experiment_edit_access(current_user, exp_row)
+
+    parsed_ids = [uuid_mod.UUID(i) for i in image_ids]
+    with _timed("set_flow_image_group_order", user=current_user.email, experiment=name, group=group_name):
+        deleted_paths = FlowImageRepo().set_group_order(exp_row.id, group_name, flow_title, parsed_ids)
+        for file_path in deleted_paths:
+            Path(file_path).unlink(missing_ok=True)
+        all_images = FlowImageRepo().list_for_experiment(exp_row.id)
+        images = [i for i in all_images if i.group_name == group_name]
+        _regenerate_design_report(exp_row, all_images)
+    _audit(
+        current_user, "flow_image.reorder", object_type="experiment", object_id=str(exp_row.id),
+        object_name=name, details={"group_name": group_name, "n_images": len(images)},
+    )
+    return images
+
+
+def _regenerate_design_report(exp_row, all_images) -> None:
+    """Called at the end of the wizard's final per-group flow-image save
+    step (run_set_flow_image_group_order) — design_report.html is written
+    once at design/redesign time (abkit/experiment.py::Experiment.design()),
+    BEFORE flow images ever exist (they're uploaded in a separate step right
+    after, see Step4Review.tsx::saveFlowImages), so the report needs
+    patching once images actually land. A full re-render isn't possible
+    here: render_design_report() needs the DesignReport object (power/SRM/
+    isolation results), which only exists transiently mid-Experiment.design()
+    and isn't reloadable via Experiment.load() — so this splices just the
+    flow-images section's freshly-rendered HTML into the already-saved file
+    in place of the anchor comment templates/design_report.html.j2 leaves
+    for exactly this purpose (see that file's comment). Best-effort: a
+    failure here (e.g. the experiment's on-disk directory got removed out
+    of band) shouldn't fail the image save itself, which already succeeded
+    in the DB."""
+    try:
+        from abkit.db.store import DbExperimentStore
+        from abkit.viz.report import render_flow_images_section
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for img in all_images:
+            grouped.setdefault(img.group_name, []).append(
+                {"flow_title": img.flow_title, "file_path": img.file_path}
+            )
+        report_path = DbExperimentStore().data_dir / exp_row.name / "design_report.html"
+        if not report_path.exists():
+            return
+        html = report_path.read_text(encoding="utf-8")
+        report_path.write_text(render_flow_images_section(html, grouped), encoding="utf-8")
+    except Exception:
+        log.error("regenerate_design_report.failed", exc_info=True, experiment=exp_row.name)

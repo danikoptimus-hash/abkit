@@ -1,4 +1,4 @@
-import { Typography, Table, Tag, Space, Button, Alert, Descriptions, Collapse, Spin, Tooltip } from 'antd'
+import { Typography, Table, Tag, Space, Button, Alert, Descriptions, Collapse, Spin, Tooltip, Image } from 'antd'
 import { DownloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../../api/client'
@@ -140,6 +140,67 @@ function ConfigSummary({ config, computed }: { config: Record<string, unknown>; 
         </Typography.Text>
       )}
     </>
+  )
+}
+
+// Stage 4 (CLAUDE.md, variant flow images) — item 4.4: absent entirely when
+// there are no images (not an empty section), grouped by group_name in the
+// order returned (already group_name, position from the backend), with the
+// group's description (Stage 3) shown alongside its flow title for context.
+function VariantFlowsSection({ name, config }: { name: string; config: Record<string, unknown> }) {
+  const { data: images } = useQuery({
+    queryKey: ['flow-images', name],
+    queryFn: async () => {
+      const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/flow-images', {
+        params: { path: { name } },
+      })
+      if (error) throw error
+      return data
+    },
+  })
+
+  if (!images || images.length === 0) return null
+
+  const descriptions = (config.group_descriptions as Record<string, string> | undefined) ?? {}
+  const byGroup = new Map<string, typeof images>()
+  for (const img of images) {
+    const list = byGroup.get(img.group_name) ?? []
+    list.push(img)
+    byGroup.set(img.group_name, list)
+  }
+
+  return (
+    <div style={{ marginTop: 24, marginBottom: 24 }}>
+      <Typography.Title level={5}>Variant flows</Typography.Title>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {[...byGroup.entries()].map(([groupName, groupImages]) => (
+          <div key={groupName} style={{ minWidth: 220 }}>
+            {groupImages[0]?.flow_title && (
+              <Typography.Text strong style={{ display: 'block' }}>
+                {groupImages[0].flow_title}
+              </Typography.Text>
+            )}
+            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+              {groupName}
+              {descriptions[groupName] ? ` — ${descriptions[groupName]}` : ''}
+            </Typography.Text>
+            <Image.PreviewGroup>
+              <Space wrap size={8}>
+                {groupImages.map((img) => (
+                  <Image
+                    key={img.id}
+                    src={`/api/v1/experiments/${name}/flow-images/${img.id}/file`}
+                    width={84}
+                    height={84}
+                    style={{ objectFit: 'cover', borderRadius: 4 }}
+                  />
+                ))}
+              </Space>
+            </Image.PreviewGroup>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -317,6 +378,8 @@ export function DesignSection({ name, config, availableReports }: Props) {
     <div>
       <Typography.Title level={5}>Configuration</Typography.Title>
       <ConfigSummary config={config} computed={computed} />
+
+      <VariantFlowsSection name={name} config={config} />
 
       <DesignDataSection name={name} />
 

@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 from abkit.config import DesignConfig, MetricConfig
 from abkit.experiment import Experiment
@@ -68,6 +69,66 @@ def test_design_report_written_and_has_all_sections(tmp_path):
     for section_id in _DESIGN_REPORT_SECTION_IDS:
         assert f'id="{section_id}"' in html, f"Секция {section_id} отсутствует в design_report.html"
     assert experiment.name in html
+
+
+def test_design_report_has_flow_images_anchor_comments_even_with_no_images(tmp_path):
+    """Stage 4: the splice anchor must always be present, even when no
+    images exist yet (the common case at design/redesign time) — otherwise
+    abkit/jobs.py::_regenerate_design_report has nothing to patch into
+    later."""
+    experiment = _demo_design(tmp_path)
+    html = (experiment.path / "design_report.html").read_text(encoding="utf-8")
+    assert "<!-- flow-images-section:start -->" in html
+    assert "<!-- flow-images-section:end -->" in html
+    assert 'id="section-flows"' not in html
+
+
+def test_render_flow_images_section_splices_images_into_saved_report(tmp_path):
+    from abkit.viz.report import render_flow_images_section
+
+    experiment = _demo_design(tmp_path)
+    report_path = experiment.path / "design_report.html"
+    original_html = report_path.read_text(encoding="utf-8")
+
+    img_path = tmp_path / "shot.png"
+    Image.new("RGB", (20, 20), (255, 0, 0)).save(img_path, format="PNG")
+    patched = render_flow_images_section(
+        original_html,
+        {"control": [{"flow_title": "Existing checkout", "file_path": str(img_path)}]},
+    )
+    assert 'id="section-flows"' in patched
+    assert "Existing checkout" in patched
+    assert "data:image/jpeg;base64," in patched
+    # Everything outside the spliced block is untouched.
+    assert 'id="section-availability"' in patched
+    assert experiment.name in patched
+
+    # A second splice with no images removes the section again (not just
+    # leaves stale content behind).
+    cleared = render_flow_images_section(patched, {})
+    assert 'id="section-flows"' not in cleared
+    assert "<!-- flow-images-section:start -->" in cleared
+
+
+def test_render_flow_images_section_handles_grayscale_alpha_source_png(tmp_path):
+    """Regression: report embedding always re-encodes to JPEG, which can't
+    write "LA" (grayscale + alpha) pixel data directly — an LA-mode PNG
+    (valid, and accepted fine at upload time since that step keeps PNGs as
+    PNG) used to make _flow_image_data_uri raise internally, silently
+    swallowed, and the whole group vanished from the report with no
+    error visible anywhere."""
+    from abkit.viz.report import render_flow_images_section
+
+    experiment = _demo_design(tmp_path)
+    original_html = (experiment.path / "design_report.html").read_text(encoding="utf-8")
+
+    img_path = tmp_path / "shot_la.png"
+    Image.new("LA", (20, 20), (128, 200)).save(img_path, format="PNG")
+    patched = render_flow_images_section(
+        original_html, {"control": [{"flow_title": "", "file_path": str(img_path)}]},
+    )
+    assert 'id="section-flows"' in patched
+    assert "data:image/jpeg;base64," in patched
 
 
 def test_design_report_shows_created_date(tmp_path):

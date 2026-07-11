@@ -1,0 +1,20 @@
+<!-- flow-images-section:start -->
+{% if flow_image_groups %}
+<section id="section-flows">
+  <h2>Variant flows</h2>
+  <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+    {% for col in flow_image_groups %}
+    <div style="min-width: 220px;">
+      {% if col.flow_title %}<p><strong>{{ col.flow_title }}</strong></p>{% endif %}
+      <p>{{ col.group_name }}</p>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        {% for data_uri in col.data_uris %}
+        <img src="{{ data_uri }}" style="width: 140px; height: auto; border-radius: 4px;">
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+<!-- flow-images-section:end -->

@@ -1,6 +1,7 @@
 import { Typography, Input, InputNumber, Button, Select, Space, Alert, Card, Tag } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { GROUP_PRESETS } from './helpTexts'
+import { FlowImagesSection } from './FlowImagesSection'
 import { numericColumns, nextId, groupsSum } from './types'
 import type { WizardState, MetricFormRow } from './types'
 
@@ -114,6 +115,8 @@ export function Step2GroupsMetrics({ state, setState }: Props) {
         message={`Sum of proportions: ${sum.toFixed(3)}${sumOk ? '' : ' — must equal 1'}`}
         style={{ marginBottom: 24 }}
       />
+
+      <FlowImagesSection state={state} setState={setState} />
 
       <Typography.Title level={5}>Metrics (at least one)</Typography.Title>
       {state.metrics.map((m) => (

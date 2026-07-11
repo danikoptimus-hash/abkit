@@ -23,6 +23,26 @@ export interface GroupFormRow {
   description: string
 }
 
+// Stage 4 (variant flow images): 'existing' images already live on the
+// server (id is the real FlowImageOut.id, previewUrl points at
+// GET /flow-images/{id}/file — same-origin, cookies ride along same as any
+// other <img>/href in this app); 'new' ones are staged client-side only
+// (id is a throwaway local key, previewUrl is a blob: object URL over
+// `file`) until Step4Review's submit uploads them.
+export interface FlowImageState {
+  id: string
+  kind: 'existing' | 'new'
+  file?: File
+  previewUrl: string
+}
+
+export interface FlowColumnState {
+  id: string
+  groupName: string
+  flowTitle: string
+  images: FlowImageState[]
+}
+
 export type SizeMode = 'mde_rel' | 'mde_abs' | 'sample_size' | 'all'
 
 export interface WizardState {
@@ -43,6 +63,13 @@ export interface WizardState {
   hypothesis: string
   unitCol: string | null
   groups: GroupFormRow[]
+  flowColumns: FlowColumnState[]
+  // Stage 4: group names that already had flow images when the wizard
+  // opened (Redesign prefill only, always [] on fresh design) — a whole
+  // column can be removed by the user without individually deleting its
+  // images first, so submit-time cleanup needs to know about groups that
+  // HAD images even if no column for them survives to submit.
+  originalFlowGroupNames: string[]
   metrics: MetricFormRow[]
   strata: string[]
   nanStrategy: 'separate_stratum' | 'drop' | 'error'

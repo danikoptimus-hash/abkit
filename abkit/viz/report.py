@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import functools
+import io
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ import jinja2
 import pandas as pd
 import yaml
 from markupsafe import Markup
+from PIL import Image
 
 from abkit import PRODUCT_NAME, __version__ as abkit_version, checks
 from abkit.viz.help_texts import get_warning, render_help_html
@@ -43,6 +46,85 @@ def _format_report_date(dt: datetime | None) -> str | None:
     if dt is None:
         return None
     return dt.strftime("%b %d, %Y").replace(" 0", " ")
+
+
+# Stage 4 (variant flow images) report-embed width — deliberately smaller
+# than the on-disk copy (abkit/flow_images.py caps uploads at 1600px, for
+# the app's own thumbnail+lightbox use) since design_report.html needs to
+# stay a reasonably-sized self-contained file with potentially many images
+# across several groups; re-encoded at request time, never written back to
+# the stored file.
+_REPORT_IMAGE_MAX_WIDTH = 900
+
+
+def _flow_image_data_uri(file_path: Path) -> str | None:
+    """Same self-contained-report rationale as _logo_data_uri, but resized/
+    re-compressed per image (not lru_cache'd — these are per-experiment user
+    files, not one static bundled asset) rather than embedded as-is."""
+    if not file_path.exists():
+        return None
+    try:
+        with Image.open(file_path) as img:
+            img.load()
+            # JPEG only writes "L" (grayscale) and "RGB" directly — anything
+            # else (RGBA/LA/P/1/CMYK/...) must be flattened first, or
+            # Image.save raises (e.g. "cannot write mode LA as JPEG", hit by
+            # a grayscale+alpha PNG that had sailed through upload-time
+            # validation fine since that only converts ahead of a JPEG
+            # SOURCE, not every mode this JPEG-only report re-encode sees).
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            if img.width > _REPORT_IMAGE_MAX_WIDTH:
+                ratio = _REPORT_IMAGE_MAX_WIDTH / img.width
+                img = img.resize((_REPORT_IMAGE_MAX_WIDTH, max(1, round(img.height * ratio))), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=70)
+    except Exception:
+        # A missing/corrupted stored file shouldn't fail the whole report —
+        # same "degrade, don't crash" choice as the missing-logo case above.
+        return None
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def _build_flow_image_groups(
+    flow_images: dict[str, list[dict[str, Any]]] | None,
+) -> list[dict[str, Any]]:
+    groups = []
+    for group_name, images in (flow_images or {}).items():
+        data_uris = [
+            uri
+            for uri in (_flow_image_data_uri(Path(img["file_path"])) for img in images)
+            if uri is not None
+        ]
+        if data_uris:
+            groups.append(
+                dict(group_name=group_name, flow_title=images[0].get("flow_title") or "", data_uris=data_uris)
+            )
+    return groups
+
+
+_FLOW_IMAGES_SECTION_RE = re.compile(
+    r"<!-- flow-images-section:start -->.*?<!-- flow-images-section:end -->", re.DOTALL
+)
+
+
+def render_flow_images_section(design_report_html: str, flow_images: dict[str, list[dict[str, Any]]]) -> str:
+    """Patches an ALREADY-SAVED design_report.html in place, replacing
+    everything between templates/_flow_images_section.html.j2's own
+    flow-images-section:start/:end HTML comments (present in every
+    design_report.html, empty or not, since that partial is always
+    included) with a freshly rendered version — see
+    abkit/jobs.py::_regenerate_design_report for why this splices instead
+    of doing a full render_design_report() re-render."""
+    template = _env.get_template("_flow_images_section.html.j2")
+    rendered = template.render(flow_image_groups=_build_flow_image_groups(flow_images))
+    new_html, n = _FLOW_IMAGES_SECTION_RE.subn(rendered.strip(), design_report_html)
+    if n == 0:
+        # Report predates this feature (no anchor comments at all) — nothing
+        # safe to splice into, leave the file untouched rather than guess.
+        return design_report_html
+    return new_html
 
 
 def _lifecycle_dates(context: dict[str, Any]) -> list[tuple[str, str]]:
@@ -208,7 +290,11 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
     )
 
 
-def render_design_report(experiment: Any, created_at: datetime | None = None) -> str:
+def render_design_report(
+    experiment: Any,
+    created_at: datetime | None = None,
+    flow_images: dict[str, list[dict[str, Any]]] | None = None,
+) -> str:
     """Строит design_report.html: упрощенный вариант (доступность, MDE, баланс, SRM, pre-A/A).
 
     created_at: Stage 2 (report header dates) — optional; design_report is
@@ -216,7 +302,14 @@ def render_design_report(experiment: Any, created_at: datetime | None = None) ->
     yet (status is always "designed" at this point) — only "Created" is
     shown. Passed explicitly by the caller (Experiment.design(), right after
     the experiment row is created) rather than read off `experiment`, since
-    the in-memory Experiment class has no DB-row timestamp fields."""
+    the in-memory Experiment class has no DB-row timestamp fields.
+
+    flow_images: Stage 4 — {group_name: [{"flow_title": str, "file_path": str}, ...]},
+    already ordered by position; optional because design_report.html is
+    generated at design/redesign time, BEFORE the wizard's post-submit
+    flow-image upload step ever runs (see abkit/jobs.py::run_set_flow_image_group_order,
+    which regenerates this file once images actually exist). Absent/empty ->
+    no Variant flows section, not an empty one."""
     config = experiment.config
     report = experiment.report
 
@@ -250,6 +343,7 @@ def render_design_report(experiment: Any, created_at: datetime | None = None) ->
     return template.render(
         experiment_name=config.name,
         created_at=_format_report_date(created_at),
+        flow_image_groups=_build_flow_image_groups(flow_images),
         config=config,
         n_candidates_total=report.n_candidates_total,
         n_excluded_by_isolation=report.n_excluded_by_isolation,

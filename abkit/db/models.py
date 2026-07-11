@@ -311,6 +311,43 @@ class ExperimentBlock(Base):
     )
 
 
+class ExperimentFlowImage(Base):
+    """Stage 4 (CLAUDE.md, вариант флоу-скриншотов по группам): опциональные
+    картинки, показывающие, что видит/делает каждый вариант — чисто для
+    отображения (Design tab, design_report.html), на сплит/анализ не влияет.
+    В отличие от Dataset (ondelete="SET NULL", "самостоятельная сущность"),
+    эти картинки — ЧАСТЬ теста, не независимая сущность: ondelete="CASCADE",
+    удаление эксперимента удаляет и БД-строки, и файлы на диске (последнее —
+    просто следствие того, что run_delete_experiment уже делает
+    shutil.rmtree() на всю папку эксперимента, файлы флоу-картинок лежат
+    внутри нее же). group_name/flow_title денормализованы на каждую строку
+    (не вынесены в отдельную "колонку"-сущность) — простому набору картинок
+    одной группы это ничего не стоит, а колонка визарда и так соответствует
+    ровно одной группе."""
+
+    __tablename__ = "experiment_flow_images"
+    __table_args__ = (
+        Index("ix_experiment_flow_images_experiment_group", "experiment_id", "group_name", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("experiments.id", ondelete="CASCADE"), nullable=False
+    )
+    group_name: Mapped[str] = mapped_column(Text, nullable=False)
+    flow_title: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Job(Base):
     """Фоновые задачи (design/analyze/validate) — FRONTEND.md §4. Без Celery:
     ThreadPoolExecutor (backend/jobs/runner.py) + эта таблица как источник

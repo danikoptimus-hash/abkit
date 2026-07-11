@@ -26,6 +26,7 @@ from abkit.db.models import (
     ExperimentAccess,
     ExperimentBlock,
     ExperimentDataset,
+    ExperimentFlowImage,
     ExperimentTag,
     Job,
     Tag,
@@ -1208,3 +1209,126 @@ class ExperimentTagRepo:
             return s.scalar(
                 select(func.count()).select_from(ExperimentTag).where(ExperimentTag.tag_id == tag_id)
             )
+
+
+class FlowImageRepo:
+    """Stage 4: per-group variant-flow screenshots. Reachable only via
+    Redesign — all mutation happens in one reconciling call
+    (set_group_order) per group at submit time, mirroring
+    BlockRepo.upsert_many's "send the full desired state, server deletes
+    what's missing" shape, EXCEPT new file uploads still need their own
+    create() first (multipart file bytes can't ride along in that JSON
+    call)."""
+
+    def count_for_group(self, experiment_id: uuid_mod.UUID, group_name: str) -> int:
+        """Enforced before create() — the ≤10/group upload limit."""
+        with session_scope() as s:
+            return s.scalar(
+                select(func.count())
+                .select_from(ExperimentFlowImage)
+                .where(
+                    ExperimentFlowImage.experiment_id == experiment_id,
+                    ExperimentFlowImage.group_name == group_name,
+                )
+            )
+
+    def create(
+        self,
+        *,
+        experiment_id: uuid_mod.UUID,
+        group_name: str,
+        flow_title: str,
+        file_path: str,
+        uploaded_by: uuid_mod.UUID | None,
+    ) -> ExperimentFlowImage:
+        with session_scope() as s:
+            # New uploads always land at the end of the group — the caller's
+            # subsequent set_group_order (final wizard submit) is what
+            # applies the user's actual drag-reorder, this position is just
+            # a safe placeholder in the meantime.
+            max_position = s.scalar(
+                select(func.max(ExperimentFlowImage.position)).where(
+                    ExperimentFlowImage.experiment_id == experiment_id,
+                    ExperimentFlowImage.group_name == group_name,
+                )
+            )
+            image = ExperimentFlowImage(
+                experiment_id=experiment_id,
+                group_name=group_name,
+                flow_title=flow_title,
+                file_path=file_path,
+                position=(max_position + 1) if max_position is not None else 0,
+                uploaded_by=uploaded_by,
+            )
+            s.add(image)
+            s.flush()
+            s.refresh(image)
+            s.expunge(image)
+            return image
+
+    def get_by_id(self, image_id: uuid_mod.UUID) -> ExperimentFlowImage | None:
+        with session_scope() as s:
+            image = s.get(ExperimentFlowImage, image_id)
+            if image is not None:
+                s.expunge(image)
+            return image
+
+    def list_for_experiment(self, experiment_id: uuid_mod.UUID) -> list[ExperimentFlowImage]:
+        with session_scope() as s:
+            rows = list(
+                s.scalars(
+                    select(ExperimentFlowImage)
+                    .where(ExperimentFlowImage.experiment_id == experiment_id)
+                    .order_by(ExperimentFlowImage.group_name, ExperimentFlowImage.position)
+                )
+            )
+            for r in rows:
+                s.expunge(r)
+            return rows
+
+    def delete(self, image_id: uuid_mod.UUID) -> str | None:
+        """Returns the deleted row's file_path (caller unlinks it — the repo
+        layer doesn't touch the filesystem, same division as the rest of
+        this module), or None if the id didn't exist."""
+        with session_scope() as s:
+            image = s.get(ExperimentFlowImage, image_id)
+            if image is None:
+                return None
+            file_path = image.file_path
+            s.delete(image)
+            return file_path
+
+    def set_group_order(
+        self, experiment_id: uuid_mod.UUID, group_name: str, flow_title: str, image_ids: list[uuid_mod.UUID]
+    ) -> list[str]:
+        """Final-submit reconciliation for one group/column: sets flow_title
+        on every surviving image, position from image_ids' order, and
+        deletes any of the group's existing rows NOT listed (the wizard's
+        "remove thumbnail" is a deferred delete, only applied here) — same
+        "send the full desired list" shape as BlockRepo.upsert_many, but
+        this one never CREATES rows (new uploads already exist as rows by
+        the time this runs, see class docstring). Returns the file_path of
+        every row this call deleted, for the caller to unlink from disk."""
+        with session_scope() as s:
+            existing = list(
+                s.scalars(
+                    select(ExperimentFlowImage).where(
+                        ExperimentFlowImage.experiment_id == experiment_id,
+                        ExperimentFlowImage.group_name == group_name,
+                    )
+                )
+            )
+            existing_by_id = {e.id: e for e in existing}
+            deleted_paths: list[str] = []
+            for position, image_id in enumerate(image_ids):
+                image = existing_by_id.get(image_id)
+                if image is None:
+                    continue  # id belongs to another experiment/group — ignored, not an error
+                image.flow_title = flow_title
+                image.position = position
+            kept_ids = set(image_ids)
+            for e in existing:
+                if e.id not in kept_ids:
+                    deleted_paths.append(e.file_path)
+                    s.delete(e)
+            return deleted_paths
