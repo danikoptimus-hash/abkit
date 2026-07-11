@@ -13,7 +13,14 @@ import pandas as pd
 from abkit import checks, storage
 from abkit.analysis.multiple_testing import adjust_p_values
 from abkit.analysis.results import AnalysisResults, TestResult
-from abkit.analysis.tests import Bootstrap, DeltaMethodTTest, MannWhitney, WelchTTest, ZTestProportions
+from abkit.analysis.tests import (
+    Bootstrap,
+    ChiSquareTest,
+    DeltaMethodTTest,
+    MannWhitney,
+    WelchTTest,
+    ZTestProportions,
+)
 from abkit.analysis.variance_reduction import CUPED, PostStratification
 from abkit.config import DesignConfig, MetricConfig
 from abkit.design import isolation, power
@@ -31,6 +38,7 @@ class DesignError(Exception):
 _STEP_REGISTRY: dict[str, type[Step]] = {
     "WelchTTest": WelchTTest,
     "ZTestProportions": ZTestProportions,
+    "ChiSquareTest": ChiSquareTest,
     "DeltaMethodTTest": DeltaMethodTTest,
     "MannWhitney": MannWhitney,
     "Bootstrap": Bootstrap,
@@ -79,21 +87,50 @@ def resolve_steps(
 def compare_methods_chains(metric: MetricConfig, seed: int | None = None) -> list[list[Step]]:
     """Стандартный набор альтернативных цепочек для устойчивости выводов (compare_methods=True).
 
-    Только для continuous-метрик, как описано в DESIGN.md; сами по себе не влияют на
-    вердикт (is_designed_method=False). seed передается в Bootstrap для воспроизводимости
-    (повторный analyze() на тех же данных должен давать бит-в-бит тот же results.json).
+    Изначально (DESIGN.md) — только для continuous-метрик; item 3 расширяет
+    набор на binary. Ratio по-прежнему не покрыт (тот же вопрос, не в
+    скоупе item 3). Сами по себе альтернативы не влияют на вердикт
+    (is_designed_method=False) — решение принимается только designed-цепочкой.
+    seed передается в Bootstrap для воспроизводимости (повторный analyze() на
+    тех же данных должен давать бит-в-бит тот же results.json).
     """
-    if metric.type != "continuous":
-        return []
-    chains: list[list[Step]] = [
-        [WelchTTest()],
-        [RemoveOutliers(upper_q=0.99), WelchTTest()],
-        [Bootstrap(method="bca", seed=seed)],
-        [MannWhitney()],
-    ]
-    if metric.pre_col:
-        chains.append([CUPED(), WelchTTest()])
-    return chains
+    if metric.type == "continuous":
+        chains: list[list[Step]] = [
+            [WelchTTest()],
+            [RemoveOutliers(upper_q=0.99), WelchTTest()],
+            [Bootstrap(method="bca", seed=seed)],
+            [MannWhitney()],
+        ]
+        if metric.pre_col:
+            chains.append([CUPED(), WelchTTest()])
+        return chains
+    if metric.type == "binary":
+        # Mann-Whitney and outlier-removal methods are deliberately NOT
+        # included: on a 0/1 series Mann-Whitney degenerates into (a
+        # noisier, rank-based restatement of) the same proportion
+        # comparison the designed Z-test already makes, and there are no
+        # "outliers" to remove from a binary indicator — both would be
+        # cross-checks in name only, not in substance.
+        chains = [
+            # Same 2x2 table as the designed Z-test, computed independently
+            # via scipy's chi-square machinery — a real cross-check of the
+            # implementation, not just of the statistical assumption.
+            [ChiSquareTest()],
+            # Percentile (not BCa): BCa's bias-correction leans on a
+            # jackknife influence-function estimate that gets noisy near
+            # the 0/1 boundary (proportions close to 0 or 1) — percentile
+            # is the simpler, more robust choice for a bounded outcome.
+            [Bootstrap(method="percentile", seed=seed)],
+        ]
+        if metric.pre_col:
+            # Same CUPED mechanics as continuous — the covariate adjustment
+            # doesn't care that the outcome itself is 0/1, and Welch t-test
+            # on the CUPED-adjusted values is exactly the recently-fixed
+            # continuous CUPED-MDE analysis path, just applied here instead
+            # of at design time.
+            chains.append([CUPED(), WelchTTest()])
+        return chains
+    return []
 
 
 def _failed_method_result(
@@ -797,9 +834,20 @@ class Experiment:
             rows.append(
                 {
                     "date": d,
-                    "effect_rel": ctx.result.effect_rel * 100,
-                    "ci_lower": ctx.result.ci_rel[0] * 100,
-                    "ci_upper": ctx.result.ci_rel[1] * 100,
+                    # Regression: these used to be pre-multiplied by 100 here,
+                    # inconsistent with every other effect_rel in the codebase
+                    # (TestResult.effect_rel, plots.py's other two charts) —
+                    # a raw fraction (0.02 = 2%), converted to percent only at
+                    # the display layer. The React chart (CumulativeLiftChart)
+                    # already does its own *100 assuming the fraction
+                    # convention, so the pre-multiplication here was silently
+                    # inflating its Y axis 100x (2% became "200", easily
+                    # mistaken for "2,000" at larger lifts). Keep raw here;
+                    # plots.py's cumulative_lift_plot (the HTML report's
+                    # chart) now does its own *100 for the same reason.
+                    "effect_rel": ctx.result.effect_rel,
+                    "ci_lower": ctx.result.ci_rel[0],
+                    "ci_upper": ctx.result.ci_rel[1],
                 }
             )
         return pd.DataFrame(rows)

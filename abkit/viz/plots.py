@@ -238,13 +238,19 @@ def distribution_plot(
 
 
 def cumulative_lift_plot(daily: pd.DataFrame, title: str = "") -> go.Figure:
-    """Кумулятивный лифт с ДИ по дням. daily: колонки date, effect_rel, ci_lower, ci_upper."""
+    """Кумулятивный лифт с ДИ по дням. daily: колонки date, effect_rel, ci_lower,
+    ci_upper — все как ДОЛИ (0.02 = 2%), тот же конвеншн, что и everywhere else
+    (TestResult.effect_rel, effects на строках 45/73 выше) — *100 только здесь,
+    на границе отрисовки."""
     fig = go.Figure()
     dates = list(daily["date"])
+    ci_upper_pct = [v * 100 for v in daily["ci_upper"]]
+    ci_lower_pct = [v * 100 for v in daily["ci_lower"]]
+    effect_rel_pct = [v * 100 for v in daily["effect_rel"]]
     fig.add_trace(
         go.Scatter(
             x=dates + dates[::-1],
-            y=list(daily["ci_upper"]) + list(daily["ci_lower"])[::-1],
+            y=ci_upper_pct + ci_lower_pct[::-1],
             fill="toself",
             fillcolor="rgba(46,125,50,0.15)",
             line=dict(color="rgba(255,255,255,0)"),
@@ -253,7 +259,7 @@ def cumulative_lift_plot(daily: pd.DataFrame, title: str = "") -> go.Figure:
         )
     )
     fig.add_trace(
-        go.Scatter(x=dates, y=list(daily["effect_rel"]), mode="lines+markers", name="Cumulative lift, %")
+        go.Scatter(x=dates, y=effect_rel_pct, mode="lines+markers", name="Cumulative lift, %")
     )
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Lift, %")

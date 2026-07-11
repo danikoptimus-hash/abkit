@@ -39,6 +39,7 @@ from backend.schemas.datasets import (
     DatasetUsageResponse,
     DeleteDatasetRequest,
     DemoDesignDatasetResponse,
+    DuplicateCheckResponse,
     MetricBaselineRequest,
     MetricBaselineResponse,
     PaginatedDatasets,
@@ -230,6 +231,41 @@ def get_column_values(
         column=column,
         values=[ColumnValueCount(value=v, count=int(c)) for v, c in top.items()],
         truncated=total_distinct > limit,
+    )
+
+
+@router.get("/{dataset_id}/duplicate-check", response_model=DuplicateCheckResponse)
+def check_duplicates(
+    dataset_id: str,
+    column: str,
+    user: CurrentUser = Depends(require_min_role("editor")),
+) -> DuplicateCheckResponse:
+    """Item 2 — Analyze tab, before "Run analysis": does this dataset have
+    duplicate values in `column` (the experiment's unit_col)? Reads the full
+    file (not a capped preview) — a dataset can easily have its only
+    duplicates past the first N rows a preview would show, and this check's
+    entire purpose is to be trustworthy enough to gate the Date column
+    requirement and the Run button on."""
+    try:
+        parsed_id = uuid_mod.UUID(dataset_id)
+    except ValueError as e:
+        raise APIError(422, "validation_error", "Invalid dataset id") from e
+
+    ds = DatasetRepo().get_by_id(parsed_id)
+    if ds is None:
+        raise APIError(404, "not_found", f"Dataset '{dataset_id}' not found")
+    if column not in ds.columns:
+        raise APIError(422, "validation_error", f"Column '{column}' is not in this dataset")
+
+    try:
+        df = read_dataset_file(ds.storage_path, dtype={column: str})
+    except OSError as e:
+        raise APIError(404, "not_found", "Dataset file is not available on disk") from e
+
+    dup_mask = df[column].duplicated(keep=False)
+    return DuplicateCheckResponse(
+        has_duplicates=bool(dup_mask.any()),
+        n_duplicated_units=int(df.loc[dup_mask, column].nunique()),
     )
 
 

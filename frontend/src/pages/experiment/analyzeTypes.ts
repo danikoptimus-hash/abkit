@@ -71,6 +71,10 @@ export interface SegmentEffect {
 
 export interface DailyLiftPoint {
   date: string
+  // Raw fractions (0.02 = 2%), same convention as the main results'
+  // effect_rel/ci_rel above — CumulativeLiftChart converts to percent with
+  // its own *100. Regression: these used to arrive pre-multiplied by 100
+  // from the backend, doubling up with the chart's own conversion.
   effect_rel: number
   ci_lower: number
   ci_upper: number

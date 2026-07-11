@@ -257,7 +257,15 @@ Once you have post-period data, open the experiment's **Analyze** tab:
 
 1. Select the dataset with your post-period results (or click **Generate demo
    post-period data (+3% effect)** to try the flow without real data).
-2. Open **Advanced options** if you need to change anything — it's collapsed
+2. **Date column** — pick the column that holds each row's date if your
+   dataset has more than one row per user (a day-by-day export, for
+   instance). ABKit checks the dataset for duplicate user IDs as soon as
+   you select it: if there aren't any, Date column stays optional (only
+   needed for the cumulative-lift chart, see below); if there are, it
+   becomes **required** — you'll see how many users have multiple rows, and
+   **Run analysis** stays disabled until you pick the column, since there's
+   no way to know how to aggregate each user's rows into one otherwise.
+3. Open **Advanced options** if you need to change anything — it's collapsed
    by default so most runs don't need to touch it:
    - **Multiple testing correction** — `holm` (default), `bonferroni`,
      `fdr_bh` (Benjamini-Hochberg), or none. This only appears when your
@@ -267,14 +275,23 @@ Once you have post-period data, open the experiment's **Analyze** tab:
      a single hypothesis, any correction is a no-op, so the control (and the
      **p-value (adj.)** / **Correction** columns in the results table) is
      hidden rather than offered.
-   - **Compare alternative methods** — checked by default, so you get
-     Welch (raw and with 1% trimming), Welch+CUPED, Bootstrap BCa, and
-     Mann-Whitney alongside your designed method without having to think
-     about it; useful for sanity-checking that the conclusion is robust
-     (these extra rows never factor into the verdict). Uncheck it for faster
-     runs on large datasets or weak machines — Bootstrap in particular
-     (10k iterations) is the heaviest of the bunch.
-3. **Run analysis**. This is an explicit step — preparing/uploading data does
+   - **Compare alternative methods** — checked by default, so your designed
+     method is cross-checked against a standard set of alternatives without
+     having to think about it (these extra rows never factor into the
+     verdict — useful only for sanity-checking that the conclusion is
+     robust). The set depends on the metric's type:
+     - **Continuous**: Welch (raw and with 1% trimming), Welch+CUPED (if a
+       pre-period column is set), Bootstrap BCa, and Mann-Whitney.
+     - **Binary**: Chi-square test (a different implementation of the same
+       comparison your designed Z-test makes — a cross-check of the code,
+       not an alternative model), Bootstrap (percentile), and CUPED+Welch
+       t-test on the 0/1 values (if a pre-period column is set). Mann-Whitney
+       and outlier-trimming aren't offered for binary metrics — both are
+       meaningless on a 0/1 series.
+     
+     Uncheck it for faster runs on large datasets or weak machines —
+     Bootstrap in particular (10k iterations) is the heaviest of the bunch.
+4. **Run analysis**. This is an explicit step — preparing/uploading data does
    not run it automatically, so you control exactly when the (final,
    decision-driving) analysis happens.
 

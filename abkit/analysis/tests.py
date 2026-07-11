@@ -392,3 +392,65 @@ class ZTestProportions(Step):
             role=ctx.role,
         )
         return ctx
+
+
+class ChiSquareTest(Step):
+    """Хи-квадрат тест независимости на таблице 2x2 (converted/not x
+    control/treatment) для binary-метрик — item 3 (compare_methods для
+    binary): для таблицы 2x2 chi2-статистика (без поправки Йетса) численно
+    равна z^2 из ZTestProportions, так что этот метод не альтернативная
+    модель, а независимая реализационная кросс-проверка z-теста (тот же
+    вывод, посчитанный другим путем через scipy.stats.chi2_contingency).
+    Сам критерий хи-квадрат не дает доверительный интервал — CI переиспользует
+    ту же Wald-аппроксимацию (нормальное приближение по SE двух пропорций),
+    что и ZTestProportions; эффект (разница пропорций) идентичен обоим
+    тестам."""
+
+    stage = "test"
+
+    def apply(self, ctx: MetricContext) -> MetricContext:
+        control_vals = ctx.values[ctx.group == ctx.control_name].dropna()
+        treat_vals = ctx.values[ctx.group == ctx.treatment_name].dropna()
+        n_control, n_treat = len(control_vals), len(treat_vals)
+        if n_control < 1 or n_treat < 1:
+            raise ValueError("Not enough observations for Chi-square test")
+
+        x_control, x_treat = float(control_vals.sum()), float(treat_vals.sum())
+        p_control, p_treat = x_control / n_control, x_treat / n_treat
+
+        table = np.array(
+            [
+                [x_control, n_control - x_control],
+                [x_treat, n_treat - x_treat],
+            ]
+        )
+        _chi2, p_value, _dof, _expected = sp_stats.chi2_contingency(table)
+
+        effect_abs = p_treat - p_control
+        effect_rel = effect_abs / p_control if p_control != 0 else float("nan")
+
+        se = np.sqrt(p_control * (1 - p_control) / n_control + p_treat * (1 - p_treat) / n_treat)
+        z_crit = sp_stats.norm.ppf(1 - ctx.alpha / 2)
+        ci_abs = (effect_abs - z_crit * se, effect_abs + z_crit * se)
+        se_rel = se / abs(p_control) if p_control != 0 else float("nan")
+        ci_rel = (effect_rel - z_crit * se_rel, effect_rel + z_crit * se_rel)
+
+        ctx.result = TestResult(
+            metric=ctx.metric_name,
+            method=method_display_name(ctx, "Chi-square test"),
+            effect_abs=float(effect_abs),
+            effect_rel=float(effect_rel),
+            ci_abs=(float(ci_abs[0]), float(ci_abs[1])),
+            ci_rel=(float(ci_rel[0]), float(ci_rel[1])),
+            p_value=float(p_value),
+            p_value_adjusted=None,
+            n={ctx.control_name: n_control, ctx.treatment_name: n_treat},
+            n_removed=dict(ctx.n_removed),
+            variance_reduction=ctx.variance_reduction,
+            cuped_rho=ctx.cuped_rho,
+            warnings=list(ctx.warnings),
+            is_designed_method=ctx.is_designed_method,
+            treatment_group=ctx.treatment_name,
+            role=ctx.role,
+        )
+        return ctx

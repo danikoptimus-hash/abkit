@@ -60,6 +60,10 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
   // "is this new or existing" resolves to is decided at Save time (below),
   // not here — this Select only ever deals in tag NAMES.
   const currentNameValue = Form.useWatch('name', form)
+  const currentOwnerIds = Form.useWatch('owner_ids', form)
+  const currentEditorIds = Form.useWatch('editor_ids', form)
+  const currentVisibleRoles = Form.useWatch('visible_roles', form)
+  const currentTags = Form.useWatch('tags', form)
 
   const [tagSearch, setTagSearch] = useState('')
   const { data: tagOptions } = useQuery({
@@ -134,11 +138,41 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
     }
   }
 
+  // Item 1.3: closing via the X icon, mask click, Esc, or the default
+  // footer's Cancel button all route through this one onCancel prop in
+  // AntD's Modal — guarding it here covers all four paths at once.
+  const arraysEqual = (a?: string[] | null, b?: string[] | null) => {
+    const aa = [...(a ?? [])].sort()
+    const bb = [...(b ?? [])].sort()
+    return aa.length === bb.length && aa.every((v, i) => v === bb[i])
+  }
+  const isDirty =
+    !!properties &&
+    (currentNameValue !== properties.name ||
+      !arraysEqual(currentOwnerIds, properties.owners.map((u) => u.id)) ||
+      !arraysEqual(currentEditorIds, properties.editors.map((u) => u.id)) ||
+      !arraysEqual(currentVisibleRoles, properties.visible_roles) ||
+      !arraysEqual(currentTags, properties.tags.map((t) => t.name)))
+  const guardedCancel = () => {
+    if (!isDirty) {
+      onCancel()
+      return
+    }
+    Modal.confirm({
+      title: 'You have unsaved changes',
+      content: 'Discard them?',
+      okText: 'Discard',
+      okButtonProps: { danger: true },
+      cancelText: 'Keep editing',
+      onOk: onCancel,
+    })
+  }
+
   return (
     <Modal
       title="Edit Properties"
       open={name !== null}
-      onCancel={onCancel}
+      onCancel={guardedCancel}
       onOk={handleSave}
       okText="Save"
       confirmLoading={saving}

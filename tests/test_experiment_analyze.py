@@ -437,7 +437,15 @@ def test_analyze_daily_data_aggregation_matches_pre_aggregated(tmp_path):
 def test_analyze_cumulative_lift_builds_on_daily_data(tmp_path):
     """Кумулятивный лифт строится по дням из сырых (не агрегированных) данных;
     последний день кумулятивного окна = вся история -> совпадает с эффектом
-    основного анализа."""
+    основного анализа.
+
+    Regression guard: daily_results' effect_rel/ci_lower/ci_upper are raw
+    fractions (0.02 = 2%), same convention as TestResult.effect_rel — NOT
+    pre-multiplied by 100. They used to be pre-multiplied here, which was
+    invisible at the core-test level (this assertion used to also multiply
+    by 100 on the right-hand side, masking it) but doubled the React chart's
+    axis 100x once its own *100 conversion ran on top (CumulativeLiftChart.tsx).
+    """
     experiment = design_simple_experiment(
         tmp_path,
         n=1000,
@@ -470,7 +478,7 @@ def test_analyze_cumulative_lift_builds_on_daily_data(tmp_path):
     assert len(daily_df) == n_days
     assert list(daily_df["date"]) == sorted(daily_df["date"])
     assert daily_df.iloc[-1]["effect_rel"] == pytest.approx(
-        results["revenue"][0].effect_rel * 100, abs=1e-6
+        results["revenue"][0].effect_rel, abs=1e-6
     )
 
 
@@ -755,11 +763,80 @@ def test_analyze_compare_methods_adds_alternative_chains(tmp_path):
     assert "Bootstrap (bca)" in methods_used
     assert "Mann-Whitney (Hodges-Lehmann)" in methods_used
     assert sum(1 for r in revenue_results if not r.is_designed_method) >= 4
-    # compare_methods не должен появляться для binary-метрик
-    assert all(r.is_designed_method for r in results["clicks"])
+    # item 3: binary тоже получает compare_methods-альтернативы (Chi-square,
+    # Bootstrap percentile) — раньше их не было вообще, см.
+    # test_analyze_compare_methods_binary_metric_gets_alternatives ниже для
+    # полной проверки состава.
+    clicks_results = results["clicks"]
+    clicks_methods = {r.method for r in clicks_results}
+    assert "Chi-square test" in clicks_methods
+    assert "Bootstrap (percentile)" in clicks_methods
+    assert sum(1 for r in clicks_results if not r.is_designed_method) >= 2
     # альтернативы не участвуют в поправке на множественность (влияющей на вердикт)
     designed = [r for r in revenue_results if r.is_designed_method]
     assert len(designed) == 1
+
+
+def test_analyze_compare_methods_binary_metric_gets_alternatives(tmp_path):
+    """Item 3: binary metric with a pre-period column + compare_methods=True
+    gets the full binary compare-methods set (Z-test designed + Chi-square +
+    Bootstrap percentile + CUPED+Welch), same treatment continuous metrics
+    already had — Mann-Whitney/outlier methods are deliberately absent (see
+    compare_methods_chains)."""
+    rng = np.random.default_rng(3)
+    n = 3000
+    design_data = pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(n)],
+            "converted": rng.binomial(1, 0.20, size=n),
+            "converted_pre": rng.binomial(1, 0.20, size=n),
+        }
+    )
+    config = DesignConfig(
+        name="binary_compare_exp",
+        unit_col="user_id",
+        groups={"control": 0.5, "treatment": 0.5},
+        metrics=[MetricConfig(name="converted", type="binary", pre_col="converted_pre")],
+        sample_size=n,
+        split_method="simple",
+        seed=17,
+    )
+    experiment = Experiment.design(config, design_data, experiments_dir=tmp_path)
+    assignments = experiment.assignments
+    n_assigned = len(assignments)
+    is_treat = (assignments["group"] == "treatment").to_numpy()
+    rng2 = np.random.default_rng(4)
+    base_rate = rng2.binomial(1, 0.20, size=n_assigned)
+    base_rate[is_treat] = rng2.binomial(1, 0.26, size=int(is_treat.sum()))
+    post_data = pd.DataFrame(
+        {
+            "user_id": list(assignments["unit_id"]),
+            "converted": base_rate,
+            "converted_pre": rng2.binomial(1, 0.20, size=n_assigned),
+        }
+    )
+
+    results = experiment.analyze(post_data, correction="none", compare_methods=True)
+    converted_results = results["converted"]
+    methods_used = {r.method for r in converted_results}
+
+    assert "Z-test of proportions" in methods_used
+    assert "Chi-square test" in methods_used
+    assert "Bootstrap (percentile)" in methods_used
+    assert "CUPED + Welch t-test" in methods_used
+    assert len(converted_results) >= 4
+
+    designed = [r for r in converted_results if r.is_designed_method]
+    assert len(designed) == 1
+    assert designed[0].method == "Z-test of proportions"
+
+    cuped_row = next(r for r in converted_results if r.method == "CUPED + Welch t-test")
+    assert cuped_row.variance_reduction is not None
+    assert cuped_row.cuped_rho is not None
+
+    # Explicitly excluded (degenerate/inapplicable for a 0/1 series).
+    assert not any("Mann-Whitney" in m for m in methods_used)
+    assert not any("RemoveOutliers" in m or "Outliers" in m for m in methods_used)
 
 
 def test_analyze_with_compare_methods_is_bit_for_bit_reproducible(tmp_path):

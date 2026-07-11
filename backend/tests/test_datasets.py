@@ -29,6 +29,59 @@ def _make_dataset(tmp_path, n_rows=5):
     return dataset_id
 
 
+def _make_dataset_with_rows(tmp_path, filename, rows, columns):
+    owner_id = UserRepo().create(
+        email=f"owner_{filename}@co.com", first_name="Owner", password_hash=hash_password("pw12345"), role="editor"
+    )
+    csv_path = tmp_path / filename
+    header = ",".join(columns)
+    csv_path.write_text("\n".join([header] + rows), encoding="utf-8")
+    dataset_id = DatasetRepo().create(
+        kind="post_analysis", filename=filename, n_rows=len(rows),
+        columns=columns, storage_path=str(csv_path), sha256="deadbeef", uploaded_by=owner_id,
+    )
+    return dataset_id
+
+
+def test_duplicate_check_reports_no_duplicates_for_unique_unit_col(app_client, tmp_path):
+    """Item 2: no dup unit_col -> Date column stays optional."""
+    _login(app_client)
+    dataset_id = _make_dataset_with_rows(
+        tmp_path, "unique.csv",
+        rows=[f"u{i},{i}" for i in range(5)],
+        columns=["user_id", "revenue"],
+    )
+    resp = app_client.get(f"/api/v1/datasets/{dataset_id}/duplicate-check", params={"column": "user_id"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"has_duplicates": False, "n_duplicated_units": 0}
+
+
+def test_duplicate_check_reports_duplicates_for_daily_data(app_client, tmp_path):
+    """Item 2: day-by-day data (each user appears on multiple rows) -> Date
+    column becomes required, counted by DISTINCT duplicated user, not by
+    duplicate row."""
+    _login(app_client)
+    rows = []
+    for day in range(3):
+        for i in range(4):
+            rows.append(f"u{i},{day},{10 + i}")
+    dataset_id = _make_dataset_with_rows(
+        tmp_path, "daily.csv", rows=rows, columns=["user_id", "day", "revenue"]
+    )
+    resp = app_client.get(f"/api/v1/datasets/{dataset_id}/duplicate-check", params={"column": "user_id"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["has_duplicates"] is True
+    assert body["n_duplicated_units"] == 4
+
+
+def test_duplicate_check_422_for_unknown_column(app_client, tmp_path):
+    _login(app_client)
+    dataset_id = _make_dataset(tmp_path)
+    resp = app_client.get(f"/api/v1/datasets/{dataset_id}/duplicate-check", params={"column": "nope"})
+    assert resp.status_code == 422
+
+
 def test_preview_requires_login(app_client, tmp_path):
     dataset_id = _make_dataset(tmp_path)
     resp = app_client.get(f"/api/v1/datasets/{dataset_id}/preview")

@@ -576,6 +576,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/datasets/{dataset_id}/duplicate-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check Duplicates
+         * @description Item 2 — Analyze tab, before "Run analysis": does this dataset have
+         *     duplicate values in `column` (the experiment's unit_col)? Reads the full
+         *     file (not a capped preview) — a dataset can easily have its only
+         *     duplicates past the first N rows a preview would show, and this check's
+         *     entire purpose is to be trustworthy enough to gate the Date column
+         *     requirement and the Run button on.
+         */
+        get: operations["check_duplicates_api_v1_datasets__dataset_id__duplicate_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/datasets/demo-design": {
         parameters: {
             query?: never;
@@ -1602,6 +1627,22 @@ export interface components {
              * @default false
              */
             confirmed: boolean;
+        };
+        /**
+         * DuplicateCheckResponse
+         * @description Analyze tab, before "Run analysis" — whether the chosen post-period
+         *     dataset has duplicate values in the experiment's unit_col (day-by-day/
+         *     multi-row-per-user data). If so, the frontend makes Date column required
+         *     and disables Run analysis until one is picked — abkit/experiment.py's
+         *     analyze() already refuses to run this combination server-side (dup +
+         *     no date_col -> AnalysisError); this just surfaces that requirement
+         *     BEFORE submission instead of after a failed job.
+         */
+        DuplicateCheckResponse: {
+            /** Has Duplicates */
+            has_duplicates: boolean;
+            /** N Duplicated Units */
+            n_duplicated_units: number;
         };
         /** ExperimentDetail */
         ExperimentDetail: {
@@ -3282,6 +3323,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ColumnValuesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_duplicates_api_v1_datasets__dataset_id__duplicate_check_get: {
+        parameters: {
+            query: {
+                column: string;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicateCheckResponse"];
                 };
             };
             /** @description Validation Error */

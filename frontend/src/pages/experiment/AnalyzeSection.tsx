@@ -29,7 +29,7 @@ interface PreparedDataset {
 }
 
 export function AnalyzeSection({
-  experimentName, hasAssignments, family, splitSource, declaredGroups,
+  experimentName, hasAssignments, family, splitSource, declaredGroups, unitCol,
 }: {
   experimentName: string
   hasAssignments: boolean
@@ -44,6 +44,10 @@ export function AnalyzeSection({
   // "Run analysis" is even enabled.
   splitSource: string
   declaredGroups: string[]
+  // Item 2: the experiment's unit_col — checked for duplicates in the
+  // prepared dataset to decide whether Date column is required. Not used
+  // for external-split experiments (no unit_col-based assignments join).
+  unitCol: string
 }) {
   const queryClient = useQueryClient()
   const [prepared, setPrepared] = useState<PreparedDataset | null>(null)
@@ -109,6 +113,26 @@ export function AnalyzeSection({
   useEffect(() => {
     setGroupMapping({})
   }, [groupColumn])
+
+  // Item 2: does the prepared dataset have duplicate unit_col values (day-
+  // by-day/multi-row-per-user data)? If so, Date column stops being
+  // optional — analyze() can't aggregate without knowing which column is
+  // the date (abkit/experiment.py already refuses this combination
+  // server-side; this surfaces it before submission instead of after a
+  // failed job). Not applicable to external-split experiments (no unit_col
+  // join at all in that flow).
+  const { data: duplicateCheck } = useQuery({
+    queryKey: ['dataset-duplicate-check', prepared?.id, unitCol],
+    enabled: !isExternal && !!prepared && !!unitCol,
+    queryFn: async () => {
+      const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/duplicate-check', {
+        params: { path: { dataset_id: prepared!.id }, query: { column: unitCol } },
+      })
+      if (error) throw new Error(errorMessage(error))
+      return data
+    },
+  })
+  const dateColRequired = !isExternal && !!duplicateCheck?.has_duplicates
 
   const mappedGroups = new Set(Object.values(groupMapping).filter((g) => g !== EXCLUDE_VALUE))
   const groupMappingComplete = declaredGroups.every((g) => mappedGroups.has(g))
@@ -220,7 +244,7 @@ export function AnalyzeSection({
             {prepared && prepared.columns.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-                  Date column (optional)
+                  {dateColRequired ? <><span style={{ color: '#ff4d4f' }}>*</span> Date column</> : 'Date column (optional)'}
                 </Typography.Text>
                 <Select
                   style={{ width: '100%' }}
@@ -230,7 +254,15 @@ export function AnalyzeSection({
                   onChange={setDateCol}
                   options={prepared.columns.map((c) => ({ value: c, label: c }))}
                   disabled={running}
+                  status={dateColRequired && !dateCol ? 'error' : undefined}
+                  aria-label="date-column-select"
                 />
+                {dateColRequired && (
+                  <Typography.Paragraph type={dateCol ? 'secondary' : 'danger'} style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                    Dataset contains {duplicateCheck?.n_duplicated_units} duplicated unit ids (daily/multi-row
+                    data). Select the date column so rows can be aggregated per user.
+                  </Typography.Paragraph>
+                )}
               </div>
             )}
           </div>
@@ -347,13 +379,19 @@ export function AnalyzeSection({
                 ? 'Select a dataset or generate demo data first'
                 : isExternal && (!groupColumn || !groupMappingComplete)
                   ? 'Finish the group assignment mapping first'
-                  : ''
+                  : dateColRequired && !dateCol
+                    ? 'This dataset has duplicate unit ids — select the date column first'
+                    : ''
             }
           >
             <Button
               type="primary"
               onClick={runAnalyze}
-              disabled={!prepared || running || (isExternal && (!groupColumn || !groupMappingComplete))}
+              disabled={
+                !prepared || running ||
+                (isExternal && (!groupColumn || !groupMappingComplete)) ||
+                (dateColRequired && !dateCol)
+              }
               loading={running}
               style={{ marginBottom: 24 }}
             >

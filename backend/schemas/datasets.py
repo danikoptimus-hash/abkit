@@ -82,6 +82,19 @@ class ColumnValuesResponse(BaseModel):
     truncated: bool
 
 
+class DuplicateCheckResponse(BaseModel):
+    """Analyze tab, before "Run analysis" — whether the chosen post-period
+    dataset has duplicate values in the experiment's unit_col (day-by-day/
+    multi-row-per-user data). If so, the frontend makes Date column required
+    and disables Run analysis until one is picked — abkit/experiment.py's
+    analyze() already refuses to run this combination server-side (dup +
+    no date_col -> AnalysisError); this just surfaces that requirement
+    BEFORE submission instead of after a failed job."""
+
+    has_duplicates: bool
+    n_duplicated_units: int
+
+
 class MetricBaselineRequest(BaseModel):
     """Форма метрики (как MetricConfig) для расчета baseline-среднего —
     нужен визарду дизайна (FRONTEND.md §5.2, шаг 3: live-пересчет абсолютного

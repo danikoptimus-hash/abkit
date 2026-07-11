@@ -175,11 +175,30 @@ export function EditDatasetModal({
 
   const running = phase === 'running'
 
+  // Item 1.3: name change or (source=sql) a changed connection/query counts
+  // as unsaved input — closing via the X/mask/Esc or the Cancel button all
+  // go through AntD's onCancel, so guarding that one prop covers all three.
+  const isDirty = name.trim() !== dataset.filename || sqlChanged
+  const guardedClose = () => {
+    if (!isDirty) {
+      onClose()
+      return
+    }
+    Modal.confirm({
+      title: 'You have unsaved changes',
+      content: 'Discard them?',
+      okText: 'Discard',
+      okButtonProps: { danger: true },
+      cancelText: 'Keep editing',
+      onOk: onClose,
+    })
+  }
+
   return (
     <Modal
       title="Edit dataset"
       open={open}
-      onCancel={onClose}
+      onCancel={guardedClose}
       footer={null}
       width={isSql ? 640 : 480}
       destroyOnHidden
@@ -274,7 +293,7 @@ export function EditDatasetModal({
         <Button type="primary" onClick={handleSave} loading={saving || running} disabled={!name.trim()}>
           Save
         </Button>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={guardedClose}>Cancel</Button>
       </Space>
     </Modal>
   )

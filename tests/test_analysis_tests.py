@@ -4,7 +4,7 @@ import pytest
 from scipy import stats as sp_stats
 from statsmodels.stats.proportion import proportions_ztest
 
-from abkit.analysis.tests import WelchTTest, ZTestProportions
+from abkit.analysis.tests import ChiSquareTest, WelchTTest, ZTestProportions
 from abkit.pipeline import MetricContext
 
 
@@ -107,3 +107,37 @@ def test_ztest_proportions_effect_rel_and_ci_sane():
 def test_ztest_proportions_rejects_empty_group():
     with pytest.raises(ValueError):
         ZTestProportions().apply(make_ctx([], [], metric_type="binary"))
+
+
+def test_chi_square_matches_scipy_and_agrees_with_ztest_direction():
+    """Item 3: Chi-square is a cross-check of ZTestProportions, not an
+    alternative model — same effect, and for a 2x2 table chi2 = z^2 (no
+    continuity correction needed on either side to agree on significance
+    direction here)."""
+    rng = np.random.default_rng(2)
+    control = rng.binomial(1, 0.10, size=2000)
+    treatment = rng.binomial(1, 0.14, size=2000)
+    values = np.concatenate([control, treatment])
+    group = ["control"] * 2000 + ["treatment"] * 2000
+
+    ctx = ChiSquareTest().apply(make_ctx(values, group, metric_type="binary"))
+    table = np.array(
+        [
+            [control.sum(), len(control) - control.sum()],
+            [treatment.sum(), len(treatment) - treatment.sum()],
+        ]
+    )
+    _chi2, expected_p, _dof, _exp = sp_stats.chi2_contingency(table)
+
+    assert ctx.result.p_value == pytest.approx(expected_p)
+    assert ctx.result.effect_abs == pytest.approx(treatment.mean() - control.mean())
+    assert ctx.result.method == "Chi-square test"
+
+    z_ctx = ZTestProportions().apply(make_ctx(values, group, metric_type="binary"))
+    # Both significant or both not, at a real effect size like this one.
+    assert (ctx.result.p_value < 0.05) == (z_ctx.result.p_value < 0.05)
+
+
+def test_chi_square_rejects_empty_group():
+    with pytest.raises(ValueError):
+        ChiSquareTest().apply(make_ctx([], [], metric_type="binary"))

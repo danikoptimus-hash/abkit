@@ -206,3 +206,53 @@ test('Results shows exactly one designed-method row per metric even with compare
   const welchCells = page.getByRole('cell', { name: 'Welch t-test', exact: true })
   await expect(welchCells).toHaveCount(1)
 })
+
+// Item 2: a post-period dataset with duplicate unit ids (day-by-day data)
+// makes Date column required — analyze() can't aggregate without knowing
+// which column is the date — and Run analysis stays disabled until one is
+// picked. Once selected, analysis proceeds normally (data aggregated per
+// user under the hood).
+test('post-data with duplicate unit ids makes Date column required and blocks Run analysis until selected', async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(60_000)
+  const name = `analyze_dupcheck_e2e_${Date.now()}`
+  await seedExperiment(request, name)
+
+  const days = ['2026-01-01', '2026-01-02', '2026-01-03']
+  const lines = ['user_id,revenue,event_date']
+  for (const day of days) {
+    for (let i = 0; i < 100; i++) {
+      lines.push(`u_${name}_${i},${100 + (i % 10)}.5,${day}`)
+    }
+  }
+  const filename = `daily_dup_${Date.now()}.csv`
+  await uploadDataset(request, lines.join('\n'), filename)
+
+  await loginViaUi(page)
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Analysis' }).click()
+
+  const datasetSelect = page.getByRole('combobox', { name: 'post-period-dataset-select' })
+  await datasetSelect.click()
+  await datasetSelect.fill(filename)
+  await page.getByTitle(filename).click()
+  await expect(page.getByText(new RegExp(`Data ready: ${filename.replace('.', '\\.')}`))).toBeVisible()
+
+  await expect(page.getByText(/Dataset contains 100 duplicated unit ids/)).toBeVisible()
+  const runButton = page.getByRole('button', { name: 'Run analysis' })
+  await expect(runButton).toBeDisabled()
+  await runButton.hover({ force: true })
+  await expect(page.getByText('This dataset has duplicate unit ids — select the date column first')).toBeVisible()
+
+  const dateColSelect = page.getByRole('combobox', { name: 'date-column-select' })
+  await dateColSelect.click()
+  await page.getByTitle('event_date', { exact: true }).click()
+
+  await expect(runButton).toBeEnabled()
+  await runButton.click()
+  await expect(
+    page.getByText(/significant positive|significant negative|no effect detected/).first(),
+  ).toBeVisible({ timeout: 20_000 })
+})

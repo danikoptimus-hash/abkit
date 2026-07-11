@@ -137,6 +137,12 @@ export function ExperimentPage() {
   const [editing, setEditing] = useState(false)
   const [draftBlocks, setDraftBlocks] = useState<BlockDraft[]>([])
   const [draftName, setDraftName] = useState('')
+  // Item 1: snapshot taken the moment Edit mode starts — compared against
+  // the live draft to decide whether there's actually something to lose.
+  // Not the query cache directly: that can change under us (refetch) while
+  // editing, which must NOT retroactively mark an untouched draft "dirty".
+  const [pristineName, setPristineName] = useState('')
+  const [pristineBlocks, setPristineBlocks] = useState<BlockDraft[]>([])
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [propertiesTarget, setPropertiesTarget] = useState<string | null>(null)
@@ -178,13 +184,54 @@ export function ExperimentPage() {
   }, [data])
 
   const startEditing = () => {
-    setDraftBlocks((blocks ?? []).map((b) => ({ id: b.id, kind: b.kind, title: b.title, content_md: b.content_md, position: b.position })))
+    const snapshot = (blocks ?? []).map((b) => ({ id: b.id, kind: b.kind, title: b.title, content_md: b.content_md, position: b.position }))
+    setDraftBlocks(snapshot)
+    setPristineBlocks(snapshot)
     setDraftName(data?.name ?? '')
+    setPristineName(data?.name ?? '')
     setEditing(true)
   }
 
   const discardEditing = () => {
     setEditing(false)
+  }
+
+  const isDirty =
+    editing && (draftName !== pristineName || JSON.stringify(draftBlocks) !== JSON.stringify(pristineBlocks))
+
+  // Item 1.2: browser tab close/reload — only wired up while there's
+  // something to lose, per the ask (a dirty-flag comparison against the
+  // snapshot above, not "always on while editing").
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+
+  // Item 1.1: internal navigation away from a dirty edit (tabs, tag-badge
+  // links, the Discard button itself) all funnel through here instead of
+  // running `action` directly — Modal.confirm is a no-op passthrough when
+  // there's nothing to lose, so callers don't need their own dirty check.
+  const confirmDiscardIfDirty = (action: () => void) => {
+    if (!isDirty) {
+      action()
+      return
+    }
+    Modal.confirm({
+      title: 'You have unsaved changes',
+      content: 'Discard them?',
+      okText: 'Discard',
+      okButtonProps: { danger: true },
+      cancelText: 'Keep editing',
+      onOk: () => {
+        setEditing(false)
+        action()
+      },
+    })
   }
 
   const saveEditing = async () => {
@@ -352,7 +399,7 @@ export function ExperimentPage() {
               <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={saveEditing}>
                 Save
               </Button>
-              <Button icon={<CloseOutlined />} onClick={discardEditing} disabled={saving}>
+              <Button icon={<CloseOutlined />} onClick={() => confirmDiscardIfDirty(discardEditing)} disabled={saving}>
                 Discard
               </Button>
             </>
@@ -365,14 +412,14 @@ export function ExperimentPage() {
           <TagList
             tags={data.tags}
             maxVisible={data.tags.length}
-            onTagClick={(tag) => navigate(`/experiments?tag=${tag.id}`)}
+            onTagClick={(tag) => confirmDiscardIfDirty(() => navigate(`/experiments?tag=${tag.id}`))}
           />
         </Space>
       )}
 
       <Tabs
         activeKey={activeTab}
-        onChange={setActiveTab}
+        onChange={(key) => confirmDiscardIfDirty(() => setActiveTab(key))}
         items={[
           {
             key: 'design',
@@ -400,6 +447,7 @@ export function ExperimentPage() {
                 family={hypothesisFamily(data.config)}
                 splitSource={String(data.config.split_source ?? 'abkit')}
                 declaredGroups={Object.keys((data.config.groups as Record<string, number>) ?? {})}
+                unitCol={String(data.config.unit_col ?? '')}
               />
             ),
           },

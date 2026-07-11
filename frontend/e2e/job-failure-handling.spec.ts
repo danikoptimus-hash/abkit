@@ -6,8 +6,14 @@ import { loginViaUi, seedExperiment, uploadDataset } from './helpers'
 // "Failed to get job status" that used to appear whenever the backend
 // process died mid-poll (OOM-killed worker). Triggering a genuine OOM here
 // isn't practical in e2e — instead we trigger a deterministic, real
-// AnalysisError (duplicate unit_id in the uploaded data) and check the UI
-// surfaces its actual message.
+// AnalysisError and check the UI surfaces its actual message.
+//
+// Trigger: a post-period export with its own "group" column, which collides
+// with the assignments join (ref edb716f1) — no duplicate unit ids, so
+// item 2's Date-column-required guard doesn't block Run analysis here; a
+// duplicate-unit-id trigger was used previously, but that path is now
+// caught by the UI itself before the button is even enabled, which would
+// make this test about the wrong thing.
 test('a failed analyze job shows its real error message, not a generic one', async ({
   page,
   request,
@@ -15,13 +21,14 @@ test('a failed analyze job shows its real error message, not a generic one', asy
   const name = `analyze_fail_e2e_${Date.now()}`
   await seedExperiment(request, name)
 
-  // Every row uses the same user_id -> check_no_duplicates raises
-  // AnalysisError before any join happens. Uploaded via the API BEFORE
-  // navigating: DatasetSelect's query is fetched once on mount and isn't
-  // invalidated by an out-of-band API call happening after the page loads.
-  const csv = 'user_id,revenue\n' + Array.from({ length: 50 }, () => `dup_user,${100}`).join('\n')
-  const dupesFilename = `dupes_${Date.now()}.csv`
-  await uploadDataset(request, csv, dupesFilename)
+  // Uploaded via the API BEFORE navigating: DatasetSelect's query is
+  // fetched once on mount and isn't invalidated by an out-of-band API call
+  // happening after the page loads.
+  const csv =
+    'user_id,revenue,group\n' +
+    Array.from({ length: 50 }, (_, i) => `u${i},${100},control`).join('\n')
+  const collisionFilename = `group_collision_${Date.now()}.csv`
+  await uploadDataset(request, csv, collisionFilename)
 
   await loginViaUi(page)
   await page.goto(`/experiments/${name}`)
@@ -29,12 +36,12 @@ test('a failed analyze job shows its real error message, not a generic one', asy
 
   const datasetSelect = page.getByRole('combobox', { name: 'post-period-dataset-select' })
   await datasetSelect.click()
-  await datasetSelect.fill(dupesFilename)
-  await page.getByTitle(dupesFilename).click()
-  await expect(page.getByText(new RegExp(`Data ready: ${dupesFilename.replace('.', '\\.')}`))).toBeVisible()
+  await datasetSelect.fill(collisionFilename)
+  await page.getByTitle(collisionFilename).click()
+  await expect(page.getByText(new RegExp(`Data ready: ${collisionFilename.replace('.', '\\.')}`))).toBeVisible()
 
   await page.getByRole('button', { name: 'Run analysis' }).click()
-  await expect(page.getByText(/duplicate 'user_id' values/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/collide with ABSet's own/)).toBeVisible({ timeout: 20_000 })
   await expect(page.getByText('Failed to get job status')).not.toBeVisible()
 })
 
