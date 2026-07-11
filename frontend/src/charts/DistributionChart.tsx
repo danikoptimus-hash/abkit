@@ -3,6 +3,7 @@ import ReactECharts from 'echarts-for-react'
 import type { EChartsInstance } from 'echarts-for-react'
 import { Alert, Segmented, Typography } from 'antd'
 import { chartColors, echartsZoomSliderStyle } from './theme'
+import { formatCiPercent, formatNumber, formatPercent, formatPercentValue, tooltipBaseStyle } from './tooltip'
 import type { Distribution, Histogram } from '../pages/experiment/analyzeTypes'
 
 const CONTROL_COLOR = '#8C9AA6'
@@ -45,15 +46,56 @@ function ContinuousDistributionChart({
   // attribute a test can assert on. { start: 0, end: 100 } = full range.
   const [zoomRange, setZoomRange] = useState({ start: 0, end: 100 })
 
+  const controlTotal = hist.control_n.reduce((a, b) => a + b, 0)
+  const treatmentTotal = hist.treatment_n.reduce((a, b) => a + b, 0)
+  const labels = binLabels(hist.bin_edges)
+
+  // Stage 1 (chart tooltips): the two grids (histogram / ECDF) each have
+  // their own xAxis, so an axis-trigger tooltip only ever gets series from
+  // ONE of them at a time — seriesType tells them apart (bar = histogram,
+  // line = ECDF) without needing to track which grid is under the cursor.
+  type AxisTooltipParam = {
+    seriesName: string
+    seriesType: string
+    dataIndex: number
+    value: number | [number, number]
+  }
+  const distributionTooltipFormatter = (params: AxisTooltipParam[]) => {
+    if (params.length === 0) return ''
+    if (params[0].seriesType === 'bar') {
+      const bin = labels[params[0].dataIndex] ?? ''
+      const rows = params
+        .map((p) => {
+          const isControl = p.seriesName === controlName
+          const n = (isControl ? hist.control_n : hist.treatment_n)[p.dataIndex] ?? 0
+          const total = isControl ? controlTotal : treatmentTotal
+          const pct = total > 0 ? (n / total) * 100 : 0
+          return `${p.seriesName}: ${formatNumber(n, 0)} (${formatPercentValue(pct)})`
+        })
+        .join('<br/>')
+      return `<b>${bin}</b><br/>${rows}`
+    }
+    // ECDF (line): value is [metric value, cumulative fraction (0-1)] —
+    // formatPercent (not formatPercentValue) since this one IS a raw
+    // fraction, unlike the ForestPlotChart values above.
+    const rows = params
+      .map((p) => {
+        const [x, cumFrac] = p.value as [number, number]
+        return `${p.seriesName}: value=${formatNumber(x)}, cumulative=${formatPercent(cumFrac)}`
+      })
+      .join('<br/>')
+    return rows
+  }
+
   const option = {
     grid: [
       { left: 60, right: 20, top: 30, height: '32%' },
       { left: 60, right: 20, top: '52%', bottom: 70 },
     ],
-    tooltip: { trigger: 'axis' },
+    tooltip: { trigger: 'axis', ...tooltipBaseStyle, formatter: distributionTooltipFormatter },
     legend: { data: [controlName, treatName], top: 0 },
     xAxis: [
-      { type: 'category', data: binLabels(hist.bin_edges), gridIndex: 0, axisLabel: { show: false } },
+      { type: 'category', data: labels, gridIndex: 0, axisLabel: { show: false } },
       {
         // Bug fix: this axis used to always auto-scale to the FULL
         // unclipped ECDF data regardless of the toggle — control_ecdf/
@@ -220,8 +262,27 @@ function BinaryDistributionChart({
     [1, distribution.treatment.ci_lo * 100, distribution.treatment.ci_hi * 100, props[1]],
   ]
 
+  const byIndex = [distribution.control, distribution.treatment]
+
   const option = {
     grid: { left: 60, right: 20, top: 20, bottom: 40 },
+    tooltip: {
+      trigger: 'axis',
+      ...tooltipBaseStyle,
+      formatter: (params: { dataIndex: number }[]) => {
+        if (params.length === 0) return ''
+        const { dataIndex } = params[0]
+        const group = categories[dataIndex]
+        const g = byIndex[dataIndex]
+        if (!g) return ''
+        return (
+          `<b>${group}</b><br/>` +
+          `Rate: ${formatPercent(g.prop)}<br/>` +
+          `95% CI: ${formatCiPercent(g.ci_lo, g.ci_hi)}<br/>` +
+          `n: ${formatNumber(g.n, 0)}`
+        )
+      },
+    },
     xAxis: { type: 'category', data: categories, axisLine: { lineStyle: { color: chartColors.axisLine } } },
     yAxis: { type: 'value', name: 'Rate, %', axisLine: { lineStyle: { color: chartColors.axisLine } } },
     series: [

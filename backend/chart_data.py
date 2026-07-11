@@ -70,14 +70,27 @@ def _binary_distribution(control: pd.Series, treatment: pd.Series) -> dict[str, 
 
 def _histogram_pair(
     control: pd.Series, treatment: pd.Series, lo: float, hi: float, nbins: int, clip_upper: float | None
-) -> tuple[list[float], list[float], list[float]]:
+) -> tuple[list[float], list[float], list[float], list[int], list[int]]:
     hi = max(hi, lo + 1e-9)
     bin_edges = np.linspace(lo, hi, nbins + 1)
     control_vals = control.clip(upper=clip_upper) if clip_upper is not None else control
     treatment_vals = treatment.clip(upper=clip_upper) if clip_upper is not None else treatment
     control_hist, _ = np.histogram(control_vals, bins=bin_edges, density=True)
     treatment_hist, _ = np.histogram(treatment_vals, bins=bin_edges, density=True)
-    return [float(x) for x in bin_edges], [float(x) for x in control_hist], [float(x) for x in treatment_hist]
+    # Stage 1 (chart tooltips): the bars plot DENSITY (unchanged, above) —
+    # the tooltip wants an actual count and % share, which density alone
+    # can't give back exactly (would need to back-derive through bin width
+    # and n, floating-point roundtrip for no reason) — a second raw-count
+    # histogram over the same edges is exact and cheap.
+    control_n, _ = np.histogram(control_vals, bins=bin_edges)
+    treatment_n, _ = np.histogram(treatment_vals, bins=bin_edges)
+    return (
+        [float(x) for x in bin_edges],
+        [float(x) for x in control_hist],
+        [float(x) for x in treatment_hist],
+        [int(x) for x in control_n],
+        [int(x) for x in treatment_n],
+    )
 
 
 def _positive_only_distribution(
@@ -102,7 +115,7 @@ def _positive_only_distribution(
 
     combined_pos = pd.concat([control_pos, treatment_pos])
     if len(combined_pos) == 0:
-        empty_hist = {"bin_edges": [], "control_counts": [], "treatment_counts": []}
+        empty_hist = {"bin_edges": [], "control_counts": [], "treatment_counts": [], "control_n": [], "treatment_n": []}
         return {
             "histogram": empty_hist, "control_ecdf": [], "treatment_ecdf": [],
             "pct_zero_control": pct_zero_control, "pct_zero_treatment": pct_zero_treatment,
@@ -110,10 +123,15 @@ def _positive_only_distribution(
 
     lo = float(combined_pos.min())
     hi = float(combined_pos.max())
-    edges, control_counts, treatment_counts = _histogram_pair(control_pos, treatment_pos, lo, hi, nbins, None)
+    edges, control_counts, treatment_counts, control_n, treatment_n = _histogram_pair(
+        control_pos, treatment_pos, lo, hi, nbins, None
+    )
 
     return {
-        "histogram": {"bin_edges": edges, "control_counts": control_counts, "treatment_counts": treatment_counts},
+        "histogram": {
+            "bin_edges": edges, "control_counts": control_counts, "treatment_counts": treatment_counts,
+            "control_n": control_n, "treatment_n": treatment_n,
+        },
         "control_ecdf": _downsample_ecdf(control_pos.to_numpy()),
         "treatment_ecdf": _downsample_ecdf(treatment_pos.to_numpy()),
         "pct_zero_control": pct_zero_control,
@@ -128,7 +146,7 @@ def _continuous_distribution(control: pd.Series, treatment: pd.Series) -> dict[s
     n = len(combined)
 
     if n == 0:
-        empty_hist = {"bin_edges": [], "control_counts": [], "treatment_counts": []}
+        empty_hist = {"bin_edges": [], "control_counts": [], "treatment_counts": [], "control_n": [], "treatment_n": []}
         return {
             "kind": "continuous", "clipped": dict(empty_hist), "full_range": dict(empty_hist),
             "control_ecdf": [], "treatment_ecdf": [], "p99_threshold": None, "n_above_p99": 0, "pct_above_p99": 0.0,
@@ -147,18 +165,24 @@ def _continuous_distribution(control: pd.Series, treatment: pd.Series) -> dict[s
 
     # toggle "полный диапазон" (FRONTEND.md §5.2) — два независимых биннинга:
     # P99-обрезанный (дефолт, наглядность) и по полным данным (без обрезки).
-    clipped_edges, clipped_control, clipped_treatment = _histogram_pair(
+    clipped_edges, clipped_control, clipped_treatment, clipped_control_n, clipped_treatment_n = _histogram_pair(
         control_clean, treatment_clean, lo, p99_threshold if p99_threshold is not None else full_max,
         nbins, p99_threshold,
     )
-    full_edges, full_control, full_treatment = _histogram_pair(
+    full_edges, full_control, full_treatment, full_control_n, full_treatment_n = _histogram_pair(
         control_clean, treatment_clean, lo, full_max, nbins, None,
     )
 
     return {
         "kind": "continuous",
-        "clipped": {"bin_edges": clipped_edges, "control_counts": clipped_control, "treatment_counts": clipped_treatment},
-        "full_range": {"bin_edges": full_edges, "control_counts": full_control, "treatment_counts": full_treatment},
+        "clipped": {
+            "bin_edges": clipped_edges, "control_counts": clipped_control, "treatment_counts": clipped_treatment,
+            "control_n": clipped_control_n, "treatment_n": clipped_treatment_n,
+        },
+        "full_range": {
+            "bin_edges": full_edges, "control_counts": full_control, "treatment_counts": full_treatment,
+            "control_n": full_control_n, "treatment_n": full_treatment_n,
+        },
         "control_ecdf": _downsample_ecdf(control_clean.to_numpy()),
         "treatment_ecdf": _downsample_ecdf(treatment_clean.to_numpy()),
         "p99_threshold": p99_threshold,
@@ -213,6 +237,9 @@ def build_chart_data(results: AnalysisResults) -> dict[str, Any]:
                     "stratum": stratum_name,
                     "effect_rel": r.effect_rel,
                     "ci_rel": list(r.ci_rel),
+                    # Stage 1 (chart tooltips): n per group, shown on hover —
+                    # not otherwise displayed anywhere for segment rows.
+                    "n": r.n,
                 }
                 for stratum_name, r in seg_list
             ]

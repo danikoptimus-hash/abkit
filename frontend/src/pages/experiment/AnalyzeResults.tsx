@@ -3,6 +3,7 @@ import { Typography, Tag, Space, Card, Alert, Row, Col } from 'antd'
 import { ForestPlotChart } from '../../charts/ForestPlotChart'
 import { DistributionChart } from '../../charts/DistributionChart'
 import { CumulativeLiftChart } from '../../charts/CumulativeLiftChart'
+import { formatPValue } from '../../charts/tooltip'
 import { HelpCollapse } from './HelpCollapse'
 import { colors } from '../../theme/tokens'
 import type { AnalysisResultsOut, TestResultOut } from './analyzeTypes'
@@ -155,6 +156,11 @@ export function AnalyzeResults({ data }: { data: AnalysisResultsOut }) {
 
           <Typography.Title level={5}>Forest plot</Typography.Title>
           <ForestPlotChart
+            // Stage 1 e2e coverage (item 1.4): only the main forest plot
+            // needs to be addressable from a test, not the per-segment ones.
+            onChartReady={(instance) => {
+              ;(window as unknown as { __abkitForestChart?: unknown }).__abkitForestChart = instance
+            }}
             rows={metricResults
               // A failed alternative method (compare_methods=True) has no
               // usable effect/CI to plot — it's shown as a "failed" row in
@@ -166,6 +172,7 @@ export function AnalyzeResults({ data }: { data: AnalysisResultsOut }) {
                 ciLoPct: r.ci_rel[0]! * 100,
                 ciHiPct: r.ci_rel[1]! * 100,
                 highlighted: r.is_designed_method,
+                extraTooltipLines: [`p-value: ${r.p_value === null ? '—' : formatPValue(r.p_value)}`],
               }))}
           />
           <HelpCollapse chartType="forest" />
@@ -205,6 +212,10 @@ export function AnalyzeResults({ data }: { data: AnalysisResultsOut }) {
                     ciLoPct: s.ci_rel[0] * 100,
                     ciHiPct: s.ci_rel[1] * 100,
                     highlighted: false,
+                    extraTooltipLines: [
+                      `n: ${metricChart.control_name}=${s.n[metricChart.control_name] ?? '—'}, ` +
+                        `${treatName}=${s.n[treatName] ?? '—'}`,
+                    ],
                   }))}
                 />
                 <HelpCollapse chartType="segment_forest" />

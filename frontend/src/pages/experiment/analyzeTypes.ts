@@ -46,8 +46,15 @@ export interface BinaryDistribution {
 
 export interface Histogram {
   bin_edges: number[]
+  // Density (bar heights) — NOT a count, despite the name (histnorm=density
+  // upstream). Kept as-is for backward compat with existing series data;
+  // control_n/treatment_n below are the actual per-bin counts, added for
+  // Stage 1's tooltip (count + % share), which density can't reconstruct
+  // exactly.
   control_counts: number[]
   treatment_counts: number[]
+  control_n: number[]
+  treatment_n: number[]
 }
 
 export interface PositiveOnlyDistribution {
@@ -80,6 +87,7 @@ export interface SegmentEffect {
   stratum: string
   effect_rel: number
   ci_rel: [number, number]
+  n: Record<string, number>
 }
 
 export interface DailyLiftPoint {

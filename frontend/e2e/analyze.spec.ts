@@ -280,6 +280,10 @@ test('distribution chart has a dataZoom slider that changes the axis range', asy
   ).toBeVisible({ timeout: 20_000 })
 
   await expect(page.getByText('Distribution: control vs treatment')).toBeVisible()
+  await page.waitForFunction(
+    () => !!(window as unknown as { __abkitDistributionChart?: unknown }).__abkitDistributionChart,
+    { timeout: 10_000 },
+  )
 
   // Two dataZoom components configured (slider + inside), both tied to the
   // histogram's and the ECDF's x axes — confirms the slider is actually
@@ -309,4 +313,48 @@ test('distribution chart has a dataZoom slider that changes the axis range', asy
     await expect(zoomState).toHaveAttribute('data-start', '0')
     await expect(zoomState).toHaveAttribute('data-end', '100')
   }
+})
+
+// Stage 1 (chart tooltips), item 1.4: hovering the forest plot and the ECDF
+// line shows a tooltip with concrete numbers. Same technique as the dataZoom
+// test above — dispatchAction a 'showTip' (the same action ECharts itself
+// dispatches on a real mouseover) on the exposed live instance instead of
+// simulating pixel-precise mouse coordinates over a canvas, then read the
+// resulting tooltip DOM content back.
+test('hovering the forest plot and the ECDF shows a tooltip with numbers', async ({ page, request }) => {
+  test.setTimeout(60_000)
+  const name = `analyze_tooltip_e2e_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Analysis' }).click()
+  await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
+  await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Run analysis' }).click()
+  await expect(
+    page.getByText(/significant positive|significant negative|no effect detected/).first(),
+  ).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('heading', { name: 'Forest plot' })).toBeVisible()
+
+  await page.waitForFunction(() => !!(window as unknown as { __abkitForestChart?: unknown }).__abkitForestChart)
+  await page.evaluate(() => {
+    ;(window as unknown as { __abkitForestChart: { dispatchAction: (a: object) => void } })
+      .__abkitForestChart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: 0 })
+  })
+  await expect(page.getByText(/Effect: -?\d/)).toBeVisible()
+  await expect(page.getByText(/95% CI: \[/)).toBeVisible()
+  await expect(page.getByText(/p-value: /)).toBeVisible()
+
+  await expect(page.getByText('Distribution: control vs treatment')).toBeVisible()
+  await page.waitForFunction(
+    () => !!(window as unknown as { __abkitDistributionChart?: unknown }).__abkitDistributionChart,
+  )
+  await page.evaluate(() => {
+    // Series order (ContinuousDistributionChart): 0/1 = histogram bars
+    // (control/treatment), 2/3 = ECDF lines (control/treatment).
+    ;(window as unknown as { __abkitDistributionChart: { dispatchAction: (a: object) => void } })
+      .__abkitDistributionChart.dispatchAction({ type: 'showTip', seriesIndex: 2, dataIndex: 0 })
+  })
+  await expect(page.getByText(/cumulative=\d/)).toBeVisible()
 })

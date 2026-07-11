@@ -79,6 +79,10 @@ test.describe('Positive-only distribution mode + Clipped-at-P99 axis fix', () =>
     ).toBeVisible({ timeout: 20_000 })
 
     await expect(page.getByText('Distribution: control vs treatment')).toBeVisible()
+    await page.waitForFunction(
+      () => !!(window as unknown as { __abkitDistributionChart?: unknown }).__abkitDistributionChart,
+      { timeout: 10_000 },
+    )
 
     // --- Item 4 regression: Clipped at P99 axis must match the threshold ---
     const clippedMax = await page.evaluate(() => {

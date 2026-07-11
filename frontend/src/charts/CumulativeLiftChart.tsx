@@ -1,5 +1,6 @@
 import ReactECharts from 'echarts-for-react'
 import { chartColors } from './theme'
+import { formatPercentValue, tooltipBaseStyle } from './tooltip'
 import type { DailyLiftPoint } from '../pages/experiment/analyzeTypes'
 
 export function CumulativeLiftChart({ points }: { points: DailyLiftPoint[] }) {
@@ -11,6 +12,27 @@ export function CumulativeLiftChart({ points }: { points: DailyLiftPoint[] }) {
 
   const option = {
     grid: { left: 60, right: 20, top: 20, bottom: 40 },
+    // Stage 1: no tooltip at all previously — the CI band series are
+    // `silent: true` (so dragging/hover doesn't fight the fill), which
+    // also excludes them from an axis-trigger tooltip's params on their
+    // own; only the visible "Cumulative lift, %" line shows up, and its
+    // own dataIndex is enough to pull the matching CI bounds back out of
+    // the closures above (cleaner than reconstructing them from the
+    // stacked/invisible series' values).
+    tooltip: {
+      trigger: 'axis',
+      ...tooltipBaseStyle,
+      formatter: (params: { seriesName: string; dataIndex: number }[]) => {
+        const liftParam = params.find((p) => p.seriesName === 'Cumulative lift, %')
+        if (!liftParam) return ''
+        const i = liftParam.dataIndex
+        return (
+          `<b>${dates[i]}</b><br/>` +
+          `Lift: ${formatPercentValue(lift[i])}<br/>` +
+          `95% CI: [${formatPercentValue(ciLower[i])}, ${formatPercentValue(ciUpper[i])}]`
+        )
+      },
+    },
     xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: chartColors.axisLine } } },
     yAxis: {
       type: 'value', name: 'Lift, %',

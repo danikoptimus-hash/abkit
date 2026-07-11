@@ -53,7 +53,10 @@ def test_continuous_metric_uses_histogram_and_ecdf():
     )
 
     types = _trace_types(fig)
-    assert types.count("histogram") == 2
+    # Histogram switched to precomputed go.Bar traces (Stage 1: per-bin
+    # tooltips need customdata, which go.Histogram's client-side auto-binning
+    # can't attach) — two bars (control/treatment) + two ECDF scatter lines.
+    assert types.count("bar") == 2
     assert types.count("scatter") == 2
     assert "(continuous)" in fig.layout.title.text
     names = [t.name for t in fig.data]
@@ -68,8 +71,9 @@ def test_continuous_auto_bins_scale_with_sqrt_n():
     fig_small = distribution_plot(small, small, metric_type="continuous")
     fig_large = distribution_plot(large, large, metric_type="continuous")
 
-    nbins_small = fig_small.data[0].nbinsx
-    nbins_large = fig_large.data[0].nbinsx
+    # Bin count == number of category labels on the (now bar-based) histogram trace
+    nbins_small = len(fig_small.data[0].x)
+    nbins_large = len(fig_large.data[0].x)
     assert nbins_small < nbins_large
     assert nbins_large <= 50
 
@@ -144,13 +148,19 @@ def test_distribution_plot_clips_x_axis_to_p99_by_default():
     combined = pd.concat([control, treatment])
     threshold, n_above, _pct = p99_clip_stats(combined)
     assert n_above > 0
-    hist_range = fig.layout.xaxis.range
+    # Row 1 (histogram) is now a category axis over bin labels built from
+    # already-clip()-ped data — no numeric xaxis.range to assert on there
+    # (see abkit/viz/plots.py::distribution_plot comment); only row 2
+    # (ECDF, still numeric) keeps the explicit range.
     ecdf_range = fig.layout.xaxis2.range
-    assert hist_range[1] == pytest.approx(threshold)
     assert ecdf_range[1] == pytest.approx(threshold)
     # гистограмма при этом строится по clip()-нутым данным (выбросы собраны в
-    # последний бин, а не обрублены совсем) — максимум х-данных трейса == threshold
-    assert max(fig.data[0].x) == pytest.approx(threshold)
+    # последний бин, а не обрублены совсем) — верхняя граница последнего бина == threshold
+    last_bin_upper = float(fig.data[0].x[-1].split("–")[1])
+    assert last_bin_upper == pytest.approx(threshold, rel=1e-3)
+    # ни одно наблюдение не потеряно — просто зажато в последний бин
+    total_control = sum(c for c, _pct in fig.data[0].customdata)
+    assert total_control == len(control)
     # ECDF же считается по ПОЛНЫМ данным (только ось обрезана визуально)
     ecdf_trace = next(t for t in fig.data if t.type == "scatter")
     assert max(ecdf_trace.x) > threshold
@@ -164,4 +174,5 @@ def test_distribution_plot_clip_to_p99_false_shows_full_range():
     fig = distribution_plot(control, treatment, metric_type="continuous", clip_to_p99=False)
 
     assert fig.layout.xaxis.range is None
-    assert max(fig.data[0].x) > 400  # исходные выбросы не обрезаны
+    last_bin_upper = float(fig.data[0].x[-1].split("–")[1])
+    assert last_bin_upper > 400  # исходные выбросы не обрезаны
