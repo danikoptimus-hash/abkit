@@ -10,6 +10,7 @@ import { nextId, groupsSum, wizardStateFromConfig } from './design-wizard/types'
 import type { WizardState, DesignConfig } from './design-wizard/types'
 
 const INITIAL_STATE: WizardState = {
+  splitMode: 'abkit',
   datasetId: null,
   columns: [],
   dtypes: {},
@@ -36,12 +37,13 @@ const INITIAL_STATE: WizardState = {
 }
 
 function stepError(step: number, state: WizardState): string | null {
+  const isExternal = state.splitMode === 'external'
   if (step === 0) {
-    if (!state.datasetId) return 'Upload data or generate demo data'
+    if (!isExternal && !state.datasetId) return 'Upload data or generate demo data'
   }
   if (step === 1) {
     if (!state.name.trim()) return 'Enter an experiment name'
-    if (!state.unitCol) return 'Select the unit column'
+    if (!isExternal && !state.unitCol) return 'Select the unit column'
     if (Math.abs(groupsSum(state) - 1) > 1e-6) return 'Group proportions must sum to 1'
     if (!state.metrics.some((m) => m.name.trim())) return 'Add at least one metric'
   }
@@ -151,13 +153,15 @@ export function DesignWizardPage() {
               onChange={(e) => setState((prev) => ({ ...prev, name: e.target.value }))}
             />
           </Tooltip>
-          <Select
-            placeholder="Unit column (unit_col)"
-            style={{ width: 220 }}
-            value={state.unitCol ?? undefined}
-            onChange={(unitCol) => setState((prev) => ({ ...prev, unitCol }))}
-            options={state.columns.map((c) => ({ value: c, label: c }))}
-          />
+          {state.splitMode === 'abkit' && (
+            <Select
+              placeholder="Unit column (unit_col)"
+              style={{ width: 220 }}
+              value={state.unitCol ?? undefined}
+              onChange={(unitCol) => setState((prev) => ({ ...prev, unitCol }))}
+              options={state.columns.map((c) => ({ value: c, label: c }))}
+            />
+          )}
         </Space>
       )}
 
@@ -180,7 +184,7 @@ export function DesignWizardPage() {
       )}
 
       <div style={{ minHeight: 300 }}>
-        {current === 0 && <Step1Data state={state} setState={setState} />}
+        {current === 0 && <Step1Data state={state} setState={setState} lockSplitMode={!!redesignName} />}
         {current === 1 && <Step2GroupsMetrics state={state} setState={setState} />}
         {current === 2 && <Step3Parameters state={state} setState={setState} />}
         {current === 3 && <Step4Review state={state} redesignName={redesignName} />}

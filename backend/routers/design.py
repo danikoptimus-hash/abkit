@@ -59,6 +59,23 @@ def start_design(
     user: CurrentUser = Depends(require_min_role("editor")),
     runner: JobRunner = Depends(get_job_runner),
 ) -> JobAccepted:
+    config = body.config
+
+    if config.split_source == "external":
+        # Item 12: no dataset at all — the split happens in an outside
+        # system (Firebase A/B Testing and similar), ABKit only stores the
+        # declared groups/metrics for later analysis.
+        def _run_external(reporter: ProgressReporter) -> dict[str, Any]:
+            from abkit.jobs import run_design_external
+
+            experiment = run_design_external(user, config, progress_callback=reporter.stage)
+            return {"experiment_name": experiment.name}
+
+        job = runner.submit("design", uuid_mod.UUID(user.id), _run_external)
+        return JobAccepted(job_id=str(job.id))
+
+    if not body.dataset_id:
+        raise APIError(422, "validation_error", "dataset_id is required for split_source='abkit'")
     try:
         dataset_uuid = uuid_mod.UUID(body.dataset_id)
     except ValueError as e:
@@ -68,7 +85,6 @@ def start_design(
     if dataset is None:
         raise APIError(404, "not_found", f"Dataset '{body.dataset_id}' not found")
 
-    config = body.config
     confirmed = body.confirmed
     # unit_col как str: иначе числовой ID с ведущими нулями ("007123")
     # необратимо теряет их при авто-парсинге pandas в int64.

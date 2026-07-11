@@ -31,6 +31,8 @@ from backend.schemas.datasets import (
     BulkDeleteDatasetsRequest,
     BulkDeleteDatasetsResult,
     BulkDeleteDatasetsSkipped,
+    ColumnValueCount,
+    ColumnValuesResponse,
     DatasetFromSqlRequest,
     DatasetOut,
     DatasetPreview,
@@ -191,6 +193,43 @@ def preview_dataset(
     return DatasetPreview(
         filename=ds.filename, n_rows=ds.n_rows, columns=ds.columns,
         rows=preview_df.to_dict(orient="records"),
+    )
+
+
+@router.get("/{dataset_id}/column-values", response_model=ColumnValuesResponse)
+def get_column_values(
+    dataset_id: str,
+    column: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    user: CurrentUser = Depends(require_min_role("editor")),
+) -> ColumnValuesResponse:
+    """Item 12 (external split) — Group assignment mapping step: distinct
+    values of the chosen group column, most frequent first, so the user can
+    map each one to a declared group (or "exclude") without guessing what's
+    actually in the data."""
+    try:
+        parsed_id = uuid_mod.UUID(dataset_id)
+    except ValueError as e:
+        raise APIError(422, "validation_error", "Invalid dataset id") from e
+
+    ds = DatasetRepo().get_by_id(parsed_id)
+    if ds is None:
+        raise APIError(404, "not_found", f"Dataset '{dataset_id}' not found")
+    if column not in ds.columns:
+        raise APIError(422, "validation_error", f"Column '{column}' is not in this dataset")
+
+    try:
+        df = read_dataset_file(ds.storage_path, dtype={column: str})
+    except OSError as e:
+        raise APIError(404, "not_found", "Dataset file is not available on disk") from e
+
+    counts = df[column].astype(str).value_counts()
+    total_distinct = len(counts)
+    top = counts.head(limit)
+    return ColumnValuesResponse(
+        column=column,
+        values=[ColumnValueCount(value=v, count=int(c)) for v, c in top.items()],
+        truncated=total_distinct > limit,
     )
 
 

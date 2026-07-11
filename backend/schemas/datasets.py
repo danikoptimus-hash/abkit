@@ -66,6 +66,22 @@ class DatasetPreview(BaseModel):
     rows: list[dict[str, Any]]
 
 
+class ColumnValueCount(BaseModel):
+    value: str
+    count: int
+
+
+class ColumnValuesResponse(BaseModel):
+    """Item 12 (external split) — Group assignment mapping step: after the
+    user picks the group column, the UI shows its distinct values (most
+    frequent first, up to `limit`) so each one can be mapped to a declared
+    group or "exclude"."""
+
+    column: str
+    values: list[ColumnValueCount]
+    truncated: bool
+
+
 class MetricBaselineRequest(BaseModel):
     """Форма метрики (как MetricConfig) для расчета baseline-среднего —
     нужен визарду дизайна (FRONTEND.md §5.2, шаг 3: live-пересчет абсолютного

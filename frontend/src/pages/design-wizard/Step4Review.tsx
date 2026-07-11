@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Typography, Button, Descriptions, Alert, Progress, Space, Tag, message } from 'antd'
 import { apiClient, errorMessage } from '../../api/client'
-import { buildDesignConfig, groupsToApi, metricsToApi } from './types'
+import { buildDesignConfig, buildExternalDesignConfig, groupsToApi, metricsToApi } from './types'
 import type { WizardState } from './types'
 
 // The wizard's optional Hypothesis field (5-item follow-up п.14) saves into
@@ -99,12 +99,26 @@ export function Step4Review({ state, redesignName }: Props) {
     }
   }
 
+  const isExternal = state.splitMode === 'external'
+
   const submit = async (confirmed: boolean) => {
-    if (!state.datasetId) return
+    if (!isExternal && !state.datasetId) return
     setPhase('running')
     setError(null)
     setConfirmation(null)
     try {
+      if (isExternal) {
+        // Item 12: no dataset, no isolation overlap to confirm, redesign
+        // isn't offered for external experiments — always a plain create.
+        const config = buildExternalDesignConfig(state)
+        const { data, error } = await apiClient.POST('/api/v1/design', {
+          body: { config, confirmed: false },
+        })
+        if (error) throw new Error(errorMessage(error))
+        await pollJob(data.job_id)
+        return
+      }
+
       const config = buildDesignConfig(state)
       if (state.sizeMode === 'mde_abs') {
         const mdeAbsMetric = state.metrics.find((m) => m.id === state.mdeAbsMetricId)
@@ -112,7 +126,7 @@ export function Step4Review({ state, redesignName }: Props) {
           throw new Error('Select a metric for the absolute MDE on the previous step')
         }
         const { data: baselineData } = await apiClient.POST('/api/v1/datasets/{dataset_id}/metric-baseline', {
-          params: { path: { dataset_id: state.datasetId } },
+          params: { path: { dataset_id: state.datasetId! } },
           body: {
             name: mdeAbsMetric.name,
             type: mdeAbsMetric.type,
@@ -150,9 +164,12 @@ export function Step4Review({ state, redesignName }: Props) {
     <div>
       <Typography.Title level={5}>Summary</Typography.Title>
       <Descriptions bordered column={1} size="small" style={{ marginBottom: 24 }}>
+        <Descriptions.Item label="Split mode">
+          {isExternal ? 'External split (e.g. Firebase)' : 'ABKit split'}
+        </Descriptions.Item>
         <Descriptions.Item label="Name">{state.name || '—'}</Descriptions.Item>
         <Descriptions.Item label="Hypothesis">{state.hypothesis.trim() || '—'}</Descriptions.Item>
-        <Descriptions.Item label="Unit Column">{state.unitCol || '—'}</Descriptions.Item>
+        {!isExternal && <Descriptions.Item label="Unit Column">{state.unitCol || '—'}</Descriptions.Item>}
         <Descriptions.Item label="Groups">
           {Object.entries(groupsToApi(state))
             .map(([name, prop]) => `${name}: ${(prop * 100).toFixed(0)}%`)
@@ -163,9 +180,15 @@ export function Step4Review({ state, redesignName }: Props) {
             .map((m) => `${m.name} (${m.type})`)
             .join(', ')}
         </Descriptions.Item>
-        <Descriptions.Item label="Strata">{state.strata.join(', ') || '—'}</Descriptions.Item>
-        <Descriptions.Item label="Split Method">{state.splitMethod}</Descriptions.Item>
-        <Descriptions.Item label="Isolation">{state.isolation}</Descriptions.Item>
+        {isExternal ? (
+          <Descriptions.Item label="Expected sample size">{state.sampleSize || '—'}</Descriptions.Item>
+        ) : (
+          <>
+            <Descriptions.Item label="Strata">{state.strata.join(', ') || '—'}</Descriptions.Item>
+            <Descriptions.Item label="Split Method">{state.splitMethod}</Descriptions.Item>
+            <Descriptions.Item label="Isolation">{state.isolation}</Descriptions.Item>
+          </>
+        )}
       </Descriptions>
 
       {phase === 'idle' && (

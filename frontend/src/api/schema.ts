@@ -208,7 +208,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Report */
+        /**
+         * Get Report
+         * @description 6-part package pt.9: `?download=1` swaps the response from an inline
+         *     HTML view (opens in a new tab, browser renders it) to a file download
+         *     (Content-Disposition: attachment) named `<experiment>_<report_name>` —
+         *     the report is a self-contained single file either way (inlined logo/
+         *     charts/CSS, no external requests), so the downloaded copy opens offline
+         *     identically to the tab view.
+         */
         get: operations["get_report_api_v1_experiments__name__reports__report_name__get"];
         put?: never;
         post?: never;
@@ -325,7 +333,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Experiment Audit */
+        /**
+         * Get Experiment Audit
+         * @description History tab (bug fix п.15): filtered by object_id, not object_name —
+         *     a new experiment created under a deleted one's old name gets a fresh
+         *     uuid (ExperimentRepo.create()), so filtering by name alone showed the
+         *     OLD experiment's events (including its own delete) mixed into the new
+         *     one's history. object_name is still stored on each entry for display,
+         *     just not used to select which rows belong to this experiment.
+         */
         get: operations["get_experiment_audit_api_v1_experiments__name__audit_get"];
         put?: never;
         post?: never;
@@ -529,6 +545,29 @@ export interface paths {
         };
         /** Preview Dataset */
         get: operations["preview_dataset_api_v1_datasets__dataset_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/datasets/{dataset_id}/column-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Column Values
+         * @description Item 12 (external split) — Group assignment mapping step: distinct
+         *     values of the chosen group column, most frequent first, so the user can
+         *     map each one to a declared group (or "exclude") without guessing what's
+         *     actually in the data.
+         */
+        get: operations["get_column_values_api_v1_datasets__dataset_id__column_values_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1085,6 +1124,12 @@ export interface components {
             compare_methods: boolean;
             /** Date Col */
             date_col?: string | null;
+            /** Group Column */
+            group_column?: string | null;
+            /** Group Mapping */
+            group_mapping?: {
+                [key: string]: string;
+            } | null;
         };
         /** AuditEntryOut */
         AuditEntryOut: {
@@ -1220,6 +1265,28 @@ export interface components {
             old_password: string;
             /** New Password */
             new_password: string;
+        };
+        /** ColumnValueCount */
+        ColumnValueCount: {
+            /** Value */
+            value: string;
+            /** Count */
+            count: number;
+        };
+        /**
+         * ColumnValuesResponse
+         * @description Item 12 (external split) — Group assignment mapping step: after the
+         *     user picks the group column, the UI shows its distinct values (most
+         *     frequent first, up to `limit`) so each one can be mapped to a declared
+         *     group or "exclude".
+         */
+        ColumnValuesResponse: {
+            /** Column */
+            column: string;
+            /** Values */
+            values: components["schemas"]["ColumnValueCount"][];
+            /** Truncated */
+            truncated: boolean;
         };
         /** CreateDatabaseConnectionRequest */
         CreateDatabaseConnectionRequest: {
@@ -1456,6 +1523,12 @@ export interface components {
             /** Metrics */
             metrics: components["schemas"]["MetricConfig"][];
             /**
+             * Split Source
+             * @default abkit
+             * @enum {string}
+             */
+            split_source: "abkit" | "external";
+            /**
              * Alpha
              * @default 0.05
              */
@@ -1523,7 +1596,7 @@ export interface components {
         DesignRequest: {
             config: components["schemas"]["DesignConfig"];
             /** Dataset Id */
-            dataset_id: string;
+            dataset_id?: string | null;
             /**
              * Confirmed
              * @default false
@@ -2482,7 +2555,9 @@ export interface operations {
     };
     get_report_api_v1_experiments__name__reports__report_name__get: {
         parameters: {
-            query?: never;
+            query?: {
+                download?: boolean;
+            };
             header?: never;
             path: {
                 report_name: string;
@@ -2500,7 +2575,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/html": string;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -3171,6 +3246,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_column_values_api_v1_datasets__dataset_id__column_values_get: {
+        parameters: {
+            query: {
+                column: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ColumnValuesResponse"];
                 };
             };
             /** @description Validation Error */

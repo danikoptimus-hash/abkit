@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Collapse, Table, Typography, Alert, Space, Spin } from 'antd'
+import { Button, Collapse, Table, Typography, Alert, Space, Spin, Radio } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../../api/client'
@@ -18,6 +18,10 @@ import { groupsFromApi, metricsFromApi } from './types'
 interface Props {
   state: WizardState
   setState: (updater: (prev: WizardState) => WizardState) => void
+  // Redesign always targets an existing ABKit-split experiment (external
+  // ones don't offer a Redesign action at all) — locked so a redesign
+  // can't accidentally switch modes mid-flow.
+  lockSplitMode?: boolean
 }
 
 // Preview rows carry only JSON-primitive values — dtypes aren't persisted
@@ -33,9 +37,10 @@ function inferDtypes(previewRows: Record<string, unknown>[]): Record<string, str
   return dtypes
 }
 
-export function Step1Data({ state, setState }: Props) {
+export function Step1Data({ state, setState, lockSplitMode }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const isExternal = state.splitMode === 'external'
 
   const applyDatasetResult = (
     datasetId: string,
@@ -107,9 +112,30 @@ export function Step1Data({ state, setState }: Props) {
 
   return (
     <div>
-      <Typography.Title level={5}>Select data about your candidate users</Typography.Title>
+      <Typography.Title level={5}>Split mode</Typography.Title>
+      <Radio.Group
+        value={state.splitMode}
+        disabled={lockSplitMode}
+        onChange={(e) => setState((prev) => ({ ...prev, splitMode: e.target.value }))}
+        style={{ marginBottom: 24 }}
+      >
+        <Radio.Button value="abkit">ABKit split</Radio.Button>
+        <Radio.Button value="external">External split (e.g. Firebase)</Radio.Button>
+      </Radio.Group>
 
-      <Collapse
+      {isExternal ? (
+        <Alert
+          type="info"
+          showIcon
+          message="No dataset needed for an external split"
+          description="The split already happens in an outside system (Firebase A/B Testing and similar) — ABKit is only used to analyze the results. Declare your groups, metrics, and hypothesis on the next steps; you'll map the actual split to real data when you run the analysis."
+          style={{ maxWidth: 640 }}
+        />
+      ) : (
+        <>
+          <Typography.Title level={5}>Select data about your candidate users</Typography.Title>
+
+          <Collapse
         ghost
         style={{ marginBottom: 16 }}
         items={[
@@ -197,6 +223,8 @@ export function Step1Data({ state, setState }: Props) {
             columns={Object.keys(state.previewRows[0]).map((k) => ({ title: k, dataIndex: k }))}
           />
         </div>
+      )}
+        </>
       )}
     </div>
   )

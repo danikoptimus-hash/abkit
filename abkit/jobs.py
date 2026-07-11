@@ -95,6 +95,25 @@ def run_design(
     return experiment
 
 
+def run_design_external(
+    current_user: CurrentUser, config: DesignConfig, **kwargs: Any
+) -> Experiment:
+    """External split (item 12) — same Editor+ gate as run_design, no data
+    involved: the split happens in an outside system (Firebase A/B Testing
+    and similar), ABKit only stores the declared groups/metrics for later
+    analysis."""
+    require_role(current_user, "editor")
+    with _timed("design_external", user=current_user.email, experiment=config.name):
+        experiment = Experiment.design_external(config, owner_id=current_user.id, **kwargs)
+    exp_row = _get_experiment_row(config.name)
+    _audit(
+        current_user, "experiment.create",
+        object_type="experiment", object_id=str(exp_row.id), object_name=config.name,
+        details={"split_source": "external"},
+    )
+    return experiment
+
+
 def run_redesign(
     current_user: CurrentUser, config: DesignConfig, data: pd.DataFrame, **kwargs: Any
 ) -> Experiment:

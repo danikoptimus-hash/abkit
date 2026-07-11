@@ -289,6 +289,7 @@ function DesignDataSection({ name }: { name: string }) {
 
 export function DesignSection({ name, config, availableReports }: Props) {
   const computed = getComputed(config)
+  const isExternal = config.split_source === 'external'
 
   return (
     <div>
@@ -364,14 +365,24 @@ export function DesignSection({ name, config, availableReports }: Props) {
             </Space>
           )}
         </>
+      ) : isExternal ? (
+        <Alert
+          type="info"
+          showIcon
+          message="External design: power calculated by the external system"
+          description="No dataset means no baseline to compute an MDE table from — the system that ran the split (e.g. Firebase A/B Testing) handles its own power calculation."
+          style={{ marginBottom: 16, maxWidth: 640 }}
+        />
       ) : (
         <Alert type="info" showIcon message="Design summary is not available for this experiment." style={{ marginBottom: 16 }} />
       )}
 
       <Space>
-        <Button icon={<DownloadOutlined />} href={`/api/v1/experiments/${name}/samples.zip`}>
-          Download Samples (ZIP)
-        </Button>
+        {!isExternal && (
+          <Button icon={<DownloadOutlined />} href={`/api/v1/experiments/${name}/samples.zip`}>
+            Download Samples (ZIP)
+          </Button>
+        )}
         {availableReports.includes('design_report.html') && (
           <>
             <Button icon={<EyeOutlined />} href={`/api/v1/experiments/${name}/reports/design_report.html`} target="_blank">

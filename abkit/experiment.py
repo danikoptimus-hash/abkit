@@ -714,6 +714,39 @@ class Experiment:
 
         return experiment
 
+    @classmethod
+    def design_external(
+        cls,
+        config: DesignConfig,
+        experiments_dir: Path | None = None,
+        owner_id: str | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> "Experiment":
+        """External split (item 12, config.split_source == "external"): the
+        split happens in an outside system (Firebase A/B Testing and
+        similar) — ABKit only stores the declared groups/metrics/hypothesis
+        for later analysis. No dataset, no isolation, no power calculation
+        (there's no data yet to estimate variance from — an achievable-MDE
+        table would just be a guess dressed up as a computation, so we
+        don't build one; see AnalyzeSection/DesignSection's "external
+        design: power calculated by the external system" note instead), no
+        assignments. Saved with empty assignments — every downstream
+        consumer (samples download, design_report's power/strata sections)
+        already handles a design with zero rows gracefully, since a design
+        can legitimately produce zero candidates in the normal flow too.
+        """
+        from abkit.experiment_store import get_experiment_store
+
+        cb = progress_callback or (lambda _label: None)
+        experiments_dir = experiments_dir or storage.get_experiments_dir()
+        store = get_experiment_store(experiments_dir)
+        empty_assignments = pd.DataFrame(columns=["unit_id", "group", "stratum", "assigned_at"])
+        cb("Saving experiment...")
+        handle = store.create_experiment(config, empty_assignments, owner_id=owner_id)
+        experiment = cls(config=config, path=handle.path, experiments_dir=experiments_dir)
+        experiment.assignments = empty_assignments
+        return experiment
+
     def _cumulative_lift(
         self,
         metric: MetricConfig,
@@ -771,6 +804,29 @@ class Experiment:
             )
         return pd.DataFrame(rows)
 
+    def _map_external_groups(
+        self, data: pd.DataFrame, group_column: str, group_mapping: dict[str, str]
+    ) -> tuple[pd.DataFrame, int, int]:
+        """External split (item 12): builds the same shape join_with_assignments
+        would (a "group" column alongside the metric data), but from the
+        post-data's own group column instead of an assignments join — there
+        are no assignments for an external-split experiment, the split
+        already happened in the outside system. group_mapping maps raw
+        column values (as strings) to a declared group name; any value
+        mapped to "exclude" (or not present in the mapping at all) drops
+        the row. Returns (merged, n_total_rows, n_excluded_rows)."""
+        if group_column not in data.columns:
+            raise checks.AnalysisError(f"Group column '{group_column}' is not in the uploaded data")
+        n_total = len(data)
+        raw = data[group_column].astype(str)
+        declared_groups = set(self.config.groups)
+        mapped = raw.map(lambda v: group_mapping.get(v))
+        keep_mask = mapped.isin(declared_groups)
+        merged = data.loc[keep_mask].copy()
+        merged["group"] = mapped.loc[keep_mask]
+        n_excluded = n_total - len(merged)
+        return merged, n_total, n_excluded
+
     def analyze(
         self,
         data: pd.DataFrame,
@@ -780,6 +836,8 @@ class Experiment:
         date_col: str | None = None,
         agg_methods: dict[str, AggMethod] | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        group_column: str | None = None,
+        group_mapping: dict[str, str] | None = None,
     ) -> AnalysisResults:
         """Анализ по фактическим данным: join -> проверки честности -> пайплайн по
         метрикам -> поправка на множественность.
@@ -793,81 +851,125 @@ class Experiment:
         юзера (разбивка по дням), date_col обязателен — иначе анализ падает с
         понятной ошибкой; при наличии date_col данные автоматически агрегируются
         до одной строки на юзера для основного анализа (см. agg_methods) и
-        используются для кумулятивного лифта по дням в отчете.
+        используются для кумулятивного лифта по дням в отчете. Not supported for
+        split_source="external" (below) — one row per user is assumed there.
         agg_methods: per-metric override способа агрегации по дням (sum/max/last/
         first); по умолчанию continuous -> sum, binary -> max, ratio -> sum num и
         den отдельно.
         progress_callback(label), если передан, вызывается перед каждым этапом —
         для UI-индикаторов прогресса (см. app.py, st.status).
+
+        group_column/group_mapping: REQUIRED when self.config.split_source ==
+        "external" (item 12) — there are no assignments to join against, the
+        group comes directly from a column in the uploaded post-data, mapped
+        to the declared group names (abkit/jobs.py::run_analyze validates
+        both are present before calling this). Ignored for the normal
+        (split_source="abkit") flow.
         """
         cb = progress_callback or (lambda _label: None)
-        if self.assignments is None:
-            raise DesignError("This experiment has no assignments (design() was not run, or they were not loaded)")
-
-        if date_col and date_col not in data.columns:
-            raise checks.AnalysisError(f"Date column '{date_col}' is not in the data")
-
-        if self.config.unit_col not in data.columns:
-            # Regression (found via a real internal_error report): this was
-            # an unguarded data[self.config.unit_col] access below, raising
-            # a raw pandas KeyError — not one of the domain exceptions
-            # backend/jobs/runner.py::_human_readable_message recognizes, so
-            # it surfaced to the user as an opaque "Internal processing
-            # error" instead of a clear, actionable one (e.g. post-period
-            # data uploaded without the unit-id column used at design time).
-            raise checks.AnalysisError(
-                f"Unit column '{self.config.unit_col}' is not in the uploaded data. "
-                "Make sure you selected the post-period dataset that has the same "
-                "user-id column used when this experiment was designed."
-            )
-
         global_warnings: list[str] = []
+        loss_result = None
 
-        dup_mask = data[self.config.unit_col].duplicated(keep=False)
-        if dup_mask.any():
-            if not date_col:
-                n_users_with_dupes = int(data.loc[dup_mask, self.config.unit_col].nunique())
+        if self.config.split_source == "external":
+            if not group_column or not group_mapping:
                 raise checks.AnalysisError(
-                    f"Found duplicate '{self.config.unit_col}' values in the data "
-                    f"({n_users_with_dupes} users with multiple rows). Either "
-                    "aggregate the data beforehand (one row = one user), or "
-                    "provide a date column — the program will aggregate by user for "
-                    "the main analysis and use the day-by-day breakdown for "
-                    "the cumulative lift."
+                    "This is an external-split experiment — select a group column and map its "
+                    "values to the declared groups before running the analysis."
                 )
-            n_users = int(data[self.config.unit_col].nunique())
-            n_days = int(data[date_col].nunique())
-            cb("Aggregating data by day...")
-            main_data = aggregate_post_data(
-                data, self.config.unit_col, self.config.metrics, date_col, agg_methods
-            )
-            global_warnings.append(
-                f"The data has a day-by-day breakdown ({n_users} unique users × "
-                f"{n_days} days). It is automatically aggregated for "
-                "the main analysis: continuous metrics — sum, binary — max, "
-                "ratio — sum(num)/sum(den) (unless overridden for the metric)."
-            )
+            if date_col:
+                raise checks.AnalysisError(
+                    "Day-by-day aggregation (a date column) isn't supported for external-split "
+                    "experiments — upload data with one row per user."
+                )
+            cb("Applying group assignment mapping...")
+            merged, n_total, n_excluded = self._map_external_groups(data, group_column, group_mapping)
+            if merged.empty:
+                raise checks.AnalysisError(
+                    "No rows matched a declared group after mapping — check the group column "
+                    "and the value mapping."
+                )
+            cb("Checking validity (SRM)...")
+            observed_counts = merged["group"].value_counts().to_dict()
+            srm_result = checks.check_srm(observed_counts, self.config.groups)
+            if not srm_result.passed:
+                global_warnings.append(
+                    f"SRM on the actual data: p-value={srm_result.p_value:.2e} < 0.001 — "
+                    "the analysis results are unreliable"
+                )
+            if n_excluded:
+                pct = n_excluded / n_total * 100 if n_total else 0.0
+                global_warnings.append(
+                    f"Group column coverage: {n_excluded} of {n_total} rows had no mapped "
+                    f"group value and were excluded ({pct:.1f}%)"
+                )
         else:
-            main_data = data
+            if self.assignments is None:
+                raise DesignError(
+                    "This experiment has no assignments (design() was not run, or they were not loaded)"
+                )
 
-        cb("Joining with assignments...")
-        merged = checks.join_with_assignments(self.assignments, main_data, self.config.unit_col)
+            if date_col and date_col not in data.columns:
+                raise checks.AnalysisError(f"Date column '{date_col}' is not in the data")
 
-        cb("Checking validity (SRM, data loss)...")
-        observed_counts = merged["group"].value_counts().to_dict()
-        srm_result = checks.check_srm(observed_counts, self.config.groups)
-        if not srm_result.passed:
-            global_warnings.append(
-                f"SRM on the actual data: p-value={srm_result.p_value:.2e} < 0.001 — "
-                "the analysis results are unreliable"
-            )
+            if self.config.unit_col not in data.columns:
+                # Regression (found via a real internal_error report): this was
+                # an unguarded data[self.config.unit_col] access below, raising
+                # a raw pandas KeyError — not one of the domain exceptions
+                # backend/jobs/runner.py::_human_readable_message recognizes, so
+                # it surfaced to the user as an opaque "Internal processing
+                # error" instead of a clear, actionable one (e.g. post-period
+                # data uploaded without the unit-id column used at design time).
+                raise checks.AnalysisError(
+                    f"Unit column '{self.config.unit_col}' is not in the uploaded data. "
+                    "Make sure you selected the post-period dataset that has the same "
+                    "user-id column used when this experiment was designed."
+                )
 
-        loss_result = checks.check_data_loss(self.assignments, merged["unit_id"])
-        if not loss_result.symmetric:
-            global_warnings.append(
-                f"Asymmetric data loss between groups (p-value={loss_result.p_value:.4f}): "
-                f"{loss_result.missing_rate}"
-            )
+            dup_mask = data[self.config.unit_col].duplicated(keep=False)
+            if dup_mask.any():
+                if not date_col:
+                    n_users_with_dupes = int(data.loc[dup_mask, self.config.unit_col].nunique())
+                    raise checks.AnalysisError(
+                        f"Found duplicate '{self.config.unit_col}' values in the data "
+                        f"({n_users_with_dupes} users with multiple rows). Either "
+                        "aggregate the data beforehand (one row = one user), or "
+                        "provide a date column — the program will aggregate by user for "
+                        "the main analysis and use the day-by-day breakdown for "
+                        "the cumulative lift."
+                    )
+                n_users = int(data[self.config.unit_col].nunique())
+                n_days = int(data[date_col].nunique())
+                cb("Aggregating data by day...")
+                main_data = aggregate_post_data(
+                    data, self.config.unit_col, self.config.metrics, date_col, agg_methods
+                )
+                global_warnings.append(
+                    f"The data has a day-by-day breakdown ({n_users} unique users × "
+                    f"{n_days} days). It is automatically aggregated for "
+                    "the main analysis: continuous metrics — sum, binary — max, "
+                    "ratio — sum(num)/sum(den) (unless overridden for the metric)."
+                )
+            else:
+                main_data = data
+
+            cb("Joining with assignments...")
+            merged = checks.join_with_assignments(self.assignments, main_data, self.config.unit_col)
+
+            cb("Checking validity (SRM, data loss)...")
+            observed_counts = merged["group"].value_counts().to_dict()
+            srm_result = checks.check_srm(observed_counts, self.config.groups)
+            if not srm_result.passed:
+                global_warnings.append(
+                    f"SRM on the actual data: p-value={srm_result.p_value:.2e} < 0.001 — "
+                    "the analysis results are unreliable"
+                )
+
+            loss_result = checks.check_data_loss(self.assignments, merged["unit_id"])
+            if not loss_result.symmetric:
+                global_warnings.append(
+                    f"Asymmetric data loss between groups (p-value={loss_result.p_value:.4f}): "
+                    f"{loss_result.missing_rate}"
+                )
 
         control_name = infer_control_name(self.config.groups)
         treatment_names = [g for g in self.config.groups if g != control_name]

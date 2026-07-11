@@ -681,6 +681,8 @@ def start_redesign(
         raise APIError(400, "invalid_status", "Only experiments in 'designed' status can be redesigned")
     if body.config.name != name:
         raise APIError(422, "validation_error", "Redesign cannot rename the experiment")
+    if body.config.split_source == "external" or not body.dataset_id:
+        raise APIError(422, "validation_error", "Redesign is not supported for external-split experiments")
 
     try:
         dataset_uuid = uuid_mod.UUID(body.dataset_id)
@@ -730,6 +732,7 @@ def start_analyze(
         results = run_analyze(
             user, experiment, data, correction=body.correction,
             compare_methods=body.compare_methods, date_col=body.date_col,
+            group_column=body.group_column, group_mapping=body.group_mapping,
             progress_callback=reporter.stage,
         )
         _save_analysis(

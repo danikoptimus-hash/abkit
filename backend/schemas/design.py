@@ -7,7 +7,9 @@ from abkit.config import DesignConfig
 
 class DesignRequest(BaseModel):
     config: DesignConfig
-    dataset_id: str
+    # Optional only for config.split_source == "external" (item 12) — that
+    # flow needs no dataset at all; validated in backend/routers/design.py.
+    dataset_id: str | None = None
     confirmed: bool = False
 
 

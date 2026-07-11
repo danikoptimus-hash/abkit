@@ -28,6 +28,13 @@ export interface WizardState {
   previewRows: Record<string, unknown>[]
   nRows: number
 
+  // Item 12: "abkit" is the usual flow (this file, as before) — "external"
+  // means the split already happened outside ABKit (Firebase A/B Testing
+  // and similar); no dataset, no split, no isolation, only a manually
+  // declared config. See buildExternalDesignConfig below for what that
+  // flow actually submits.
+  splitMode: 'abkit' | 'external'
+
   name: string
   hypothesis: string
   unitCol: string | null
@@ -85,6 +92,7 @@ export function buildDesignConfig(state: WizardState): DesignConfig {
     metrics: metricsToApi(state),
     alpha: 0.05,
     power: 0.8,
+    split_source: 'abkit',
     split_method: state.splitMethod,
     strata: state.strata,
     n_buckets_continuous: 4,
@@ -102,6 +110,34 @@ export function buildDesignConfig(state: WizardState): DesignConfig {
   // mde_abs подставляется отдельно (buildDesignConfigWithAbsMde) — там нужен
   // baseline_mean, полученный асинхронно с сервера.
   return config
+}
+
+// Item 12 (external split): no dataset, so none of the ABKit-split-only
+// fields (split_method/strata/isolation/nan_strategy) mean anything — sent
+// as harmless fixed defaults rather than left to whatever they happened to
+// be in state, so a persisted external config never LOOKS like it made an
+// isolation/split-method decision it didn't actually make. sample_size is
+// the one field that IS meaningful here (expected size, for reference) —
+// carried over as-is when the user filled it in.
+export function buildExternalDesignConfig(state: WizardState): DesignConfig {
+  return {
+    name: state.name.trim(),
+    unit_col: '',
+    groups: groupsToApi(state),
+    metrics: metricsToApi(state),
+    alpha: 0.05,
+    power: 0.8,
+    split_source: 'external',
+    split_method: 'simple',
+    strata: [],
+    n_buckets_continuous: 4,
+    min_stratum_size: 20,
+    nan_strategy: 'separate_stratum',
+    isolation: 'off',
+    exclude_experiments: 'all_active',
+    isolation_selected_experiments: [],
+    sample_size: state.sampleSize > 0 ? state.sampleSize : undefined,
+  }
 }
 
 let idCounter = 0
@@ -140,6 +176,7 @@ export function wizardStateFromConfig(config: DesignConfig): Partial<WizardState
   else if (config.mde != null) sizeMode = 'mde_rel'
   else if (config.sample_size != null) sizeMode = 'sample_size'
   return {
+    splitMode: config.split_source === 'external' ? 'external' : 'abkit',
     name: config.name,
     unitCol: config.unit_col,
     groups: groupsFromApi(config.groups),

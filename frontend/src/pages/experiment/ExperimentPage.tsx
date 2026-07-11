@@ -306,6 +306,11 @@ export function ExperimentPage() {
           onToggle={handleTogglePublication}
         />
         <StatusBadge status={data.status} canEdit={canEdit && !editing} onChange={handleStatusChange} />
+        {data.config.split_source === 'external' && (
+          <Tooltip title="The split happened in an outside system (e.g. Firebase A/B Testing) — ABKit is used for analysis only">
+            <Tag color="purple">External split</Tag>
+          </Tooltip>
+        )}
         <LastModifiedText
           at={data.last_modified_at}
           firstName={data.last_modified_by_first_name}
@@ -322,7 +327,10 @@ export function ExperimentPage() {
                   // Redesigning a running (or later) experiment is a
                   // methodological disaster (5-part package pt.3.4) — the
                   // item is absent, not just disabled, once past 'designed'.
-                  ...(data.status === 'designed'
+                  // Also absent for external-split experiments (item 12) —
+                  // Redesign's wizard flow assumes a dataset, which
+                  // external experiments never have.
+                  ...(data.status === 'designed' && data.config.split_source !== 'external'
                     ? [{ key: 'redesign', icon: <ExperimentOutlined />, label: 'Redesign', onClick: startRedesign }]
                     : []),
                   { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => setDeleteTarget(name) },
@@ -385,7 +393,13 @@ export function ExperimentPage() {
             key: 'analysis',
             label: 'Analysis',
             children: (
-              <AnalyzeSection experimentName={name} hasAssignments family={hypothesisFamily(data.config)} />
+              <AnalyzeSection
+                experimentName={name}
+                hasAssignments
+                family={hypothesisFamily(data.config)}
+                splitSource={String(data.config.split_source ?? 'abkit')}
+                declaredGroups={Object.keys((data.config.groups as Record<string, number>) ?? {})}
+              />
             ),
           },
           {

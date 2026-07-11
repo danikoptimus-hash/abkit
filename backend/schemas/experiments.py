@@ -135,6 +135,13 @@ class AnalyzeRequest(BaseModel):
     correction: str = "holm"
     compare_methods: bool = False
     date_col: str | None = None
+    # Item 12 (external split) — required when the experiment's
+    # config.split_source == "external": there's no assignments join, the
+    # group comes from this column in the uploaded data, mapped (raw value
+    # -> declared group name, or "exclude") via group_mapping. Both ignored
+    # for the normal split_source="abkit" flow.
+    group_column: str | None = None
+    group_mapping: dict[str, str] | None = None
 
 
 class AnalyzeDemoRequest(BaseModel):

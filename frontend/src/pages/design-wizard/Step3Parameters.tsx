@@ -17,6 +17,7 @@ function missingStats(state: WizardState, column: string): { count: number; pct:
 }
 
 export function Step3Parameters({ state, setState }: Props) {
+  const isExternal = state.splitMode === 'external'
   const [baselineMean, setBaselineMean] = useState<number | null | 'loading'>(null)
 
   const mdeAbsMetric = state.metrics.find((m) => m.id === state.mdeAbsMetricId)
@@ -63,6 +64,31 @@ export function Step3Parameters({ state, setState }: Props) {
 
   const relFromAbs =
     typeof baselineMean === 'number' && baselineMean !== 0 ? state.mdeAbsValue / baselineMean : null
+
+  if (isExternal) {
+    // Item 12: no dataset means no baseline to compute an achievable MDE
+    // from — an MDE table here would just be a guess dressed up as a
+    // computation, so it's not offered at all. Split method, strata, and
+    // isolation don't apply either (no split happening, no candidates to
+    // isolate) — only an optional reference sample size.
+    return (
+      <div>
+        <Typography.Title level={5}>Expected sample size (optional)</Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ maxWidth: 500 }}>
+          For reference only — the external system calculates its own power/MDE, so ABKit won't build an MDE
+          table for this experiment.
+        </Typography.Paragraph>
+        <InputNumber
+          addonBefore="Sample size"
+          min={0}
+          step={100}
+          value={state.sampleSize}
+          onChange={(v) => setState((prev) => ({ ...prev, sampleSize: v ?? 0 }))}
+          style={{ width: 320 }}
+        />
+      </div>
+    )
+  }
 
   return (
     <div>

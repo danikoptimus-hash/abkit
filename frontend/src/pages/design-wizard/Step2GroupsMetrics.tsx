@@ -10,6 +10,7 @@ interface Props {
 }
 
 export function Step2GroupsMetrics({ state, setState }: Props) {
+  const isExternal = state.splitMode === 'external'
   const numeric = numericColumns(state)
   const numericOptions = [{ value: '__none__', label: '(none)' }, ...numeric.map((c) => ({ value: c, label: c }))]
   const sum = groupsSum(state)
@@ -109,9 +110,11 @@ export function Step2GroupsMetrics({ state, setState }: Props) {
                 { value: 'ratio', label: 'ratio' },
               ]}
             />
-            {m.type === 'ratio' ? (
+            {m.type === 'ratio' || isExternal ? (
               <Input
-                placeholder="Metric name (label), e.g. conv_rate"
+                placeholder={
+                  m.type === 'ratio' ? 'Metric name (label), e.g. conv_rate' : 'Data column name, e.g. conversion'
+                }
                 style={{ width: 220 }}
                 value={m.name}
                 onChange={(e) => updateMetric(setState, m.id, { name: e.target.value })}
@@ -142,39 +145,69 @@ export function Step2GroupsMetrics({ state, setState }: Props) {
 
           {m.type === 'ratio' ? (
             <Space>
-              <Select
-                placeholder="Numerator (num)"
-                style={{ width: 200 }}
-                value={m.num ?? '__none__'}
-                onChange={(v) => updateMetric(setState, m.id, { num: v === '__none__' ? null : v })}
-                options={numericOptions}
-              />
-              <Select
-                placeholder="Denominator (den)"
-                style={{ width: 200 }}
-                value={m.den ?? '__none__'}
-                onChange={(v) => updateMetric(setState, m.id, { den: v === '__none__' ? null : v })}
-                options={numericOptions}
-              />
+              {isExternal ? (
+                <>
+                  <Input
+                    placeholder="Numerator column (num)"
+                    style={{ width: 200 }}
+                    value={m.num ?? ''}
+                    onChange={(e) => updateMetric(setState, m.id, { num: e.target.value || null })}
+                  />
+                  <Input
+                    placeholder="Denominator column (den)"
+                    style={{ width: 200 }}
+                    value={m.den ?? ''}
+                    onChange={(e) => updateMetric(setState, m.id, { den: e.target.value || null })}
+                  />
+                </>
+              ) : (
+                <>
+                  <Select
+                    placeholder="Numerator (num)"
+                    style={{ width: 200 }}
+                    value={m.num ?? '__none__'}
+                    onChange={(v) => updateMetric(setState, m.id, { num: v === '__none__' ? null : v })}
+                    options={numericOptions}
+                  />
+                  <Select
+                    placeholder="Denominator (den)"
+                    style={{ width: 200 }}
+                    value={m.den ?? '__none__'}
+                    onChange={(v) => updateMetric(setState, m.id, { den: v === '__none__' ? null : v })}
+                    options={numericOptions}
+                  />
+                </>
+              )}
             </Space>
           ) : (
             <div>
-              <Select
-                placeholder="pre-period column (for CUPED, optional)"
-                style={{ width: 320 }}
-                value={m.preCol ?? '__none__'}
-                onChange={(v) => updateMetric(setState, m.id, { preCol: v === '__none__' ? null : v })}
-                options={numericOptions}
-              />
-              {m.type === 'binary' && (
-                <div style={{ marginTop: 4 }}>
-                  <Typography.Text type="secondary">Suitable 0/1 columns: </Typography.Text>
-                  {binaryLikeColumns.length ? (
-                    binaryLikeColumns.map((c) => <Tag key={c}>{c}</Tag>)
-                  ) : (
-                    <Typography.Text type="secondary">none found</Typography.Text>
+              {isExternal ? (
+                <Input
+                  placeholder="Pre-period column (for CUPED, optional)"
+                  style={{ width: 320 }}
+                  value={m.preCol ?? ''}
+                  onChange={(e) => updateMetric(setState, m.id, { preCol: e.target.value || null })}
+                />
+              ) : (
+                <>
+                  <Select
+                    placeholder="pre-period column (for CUPED, optional)"
+                    style={{ width: 320 }}
+                    value={m.preCol ?? '__none__'}
+                    onChange={(v) => updateMetric(setState, m.id, { preCol: v === '__none__' ? null : v })}
+                    options={numericOptions}
+                  />
+                  {m.type === 'binary' && (
+                    <div style={{ marginTop: 4 }}>
+                      <Typography.Text type="secondary">Suitable 0/1 columns: </Typography.Text>
+                      {binaryLikeColumns.length ? (
+                        binaryLikeColumns.map((c) => <Tag key={c}>{c}</Tag>)
+                      ) : (
+                        <Typography.Text type="secondary">none found</Typography.Text>
+                      )}
+                    </div>
                   )}
-                </div>
+                </>
               )}
             </div>
           )}

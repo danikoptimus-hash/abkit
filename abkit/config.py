@@ -34,6 +34,14 @@ class DesignConfig(BaseModel):
     unit_col: str
     groups: dict[str, float]
     metrics: list[MetricConfig]
+    split_source: Literal["abkit", "external"] = "abkit"
+    """"abkit" (default): the usual flow — ABKit picks candidates, splits
+    them, stores assignments. "external" (item 12): the split happens in an
+    outside system (Firebase A/B Testing and similar) — ABKit only stores
+    the declared groups/metrics for analysis; no dataset, no isolation, no
+    power calculation (nothing to compute variance from), no assignments.
+    See Experiment.design_external()/analyze()'s split_source=="external"
+    branch."""
     alpha: float = 0.05
     power: float = 0.8
     mde: float | None = None

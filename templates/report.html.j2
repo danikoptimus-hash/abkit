@@ -47,7 +47,9 @@
   <p>Split method: {{ config.split_method }} · Multiple-testing correction: {{ correction }}</p>
   <div class="badges">
     <span class="badge {{ 'ok' if srm.passed else 'fail' }}">SRM: {{ 'ok' if srm.passed else 'FAIL' }} (p={{ '%.4g' % srm.p_value }})</span>
+    {% if loss %}
     <span class="badge {{ 'ok' if loss.symmetric else 'fail' }}">Loss: {{ 'symmetric' if loss.symmetric else 'ASYMMETRIC' }}</span>
+    {% endif %}
   </div>
   {% if global_warnings %}
   <div class="warnings">
@@ -158,6 +160,7 @@
   </table>
   <p>chi2={{ '%.4g' % srm.chi2 }}, p={{ '%.4g' % srm.p_value }}</p>
 
+  {% if loss %}
   <h3>Data loss by group</h3>
   <table>
     <tr><th>Group</th><th>Assigned</th><th>Present</th><th>Missing</th><th>Loss rate</th></tr>
@@ -168,6 +171,11 @@
     </tr>
     {% endfor %}
   </table>
+  {% else %}
+  <p>Data loss (assigned vs. present) is not applicable — this is an external-split experiment,
+    ABKit has no assignments to compare against. See the "Group column coverage" warning above
+    for how many rows were excluded during group mapping instead.</p>
+  {% endif %}
   {{ help_details('srm_table', True) }}
 
   <h3>n_removed and variance_reduction (designed chains)</h3>
