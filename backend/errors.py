@@ -93,10 +93,24 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
         # Не протекает деталями внутренних исключений наружу — только generic
         # сообщение; структурированный traceback уходит в лог (см. main.py).
+        # error_id (короткий uuid) — единственная связь между тем, что видит
+        # пользователь, и строкой в логе с полным traceback: голое
+        # "Internal processing error" без него было бесполезно для
+        # диагностики (найдено на баге с кириллицей в Content-Disposition —
+        # без error_id пришлось вручную grep'ать логи по времени запроса).
+        # В message, а не только в details, чтобы код был виден прямо в
+        # тосте UI, не требуя от фронтенда отдельно читать details.
+        import uuid
+
         from abkit.logging_config import get_logger
 
-        get_logger("backend.errors").error("unhandled_exception", exc_info=True, path=str(request.url))
+        error_id = uuid.uuid4().hex[:8]
+        get_logger("backend.errors").error(
+            "unhandled_exception", exc_info=True, path=str(request.url), error_id=error_id
+        )
         return JSONResponse(
             status_code=500,
-            content=_error_body("internal_error", "Internal processing error"),
+            content=_error_body(
+                "internal_error", f"Internal processing error (ref: {error_id})", {"error_id": error_id}
+            ),
         )

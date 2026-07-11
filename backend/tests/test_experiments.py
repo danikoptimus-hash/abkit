@@ -206,13 +206,16 @@ def test_experiment_reports_from_artifact_dir(app_client, tmp_path, monkeypatch)
     assert "attachment" not in report_resp.headers.get("content-disposition", "")
 
     # 6-part package pt.9: ?download=1 swaps to a file attachment with a
-    # <experiment>_<report_name> filename, same content either way.
+    # <experiment>_<report_name> filename, same content either way. The
+    # header also carries filename*=UTF-8''... (RFC 5987, needed for
+    # non-ASCII experiment names — see content_disposition()); this
+    # experiment's name is plain ASCII, so the two agree.
     download_resp = app_client.get("/api/v1/experiments/exp_files/reports/design_report.html?download=1")
     assert download_resp.status_code == 200
     assert download_resp.text == report_resp.text
-    assert (
-        download_resp.headers["content-disposition"]
-        == 'attachment; filename="exp_files_design_report.html"'
+    assert download_resp.headers["content-disposition"] == (
+        'attachment; filename="exp_files_design_report.html"; '
+        "filename*=UTF-8''exp_files_design_report.html"
     )
 
     bad_report = app_client.get("/api/v1/experiments/exp_files/reports/report.html")
@@ -282,6 +285,69 @@ def test_experiment_samples_generated_from_assignments_table(app_client, tmp_pat
     with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
         assert set(zf.namelist()) == {"control.csv", "treatment.csv"}
         assert zf.read("treatment.csv").decode("utf-8").count("\n") == 3  # header + 2 rows
+
+
+def test_samples_download_works_for_cyrillic_colon_experiment_name(app_client, tmp_path, monkeypatch):
+    """Samples-download follow-up: a real experiment name like
+    "PA: Тестовый эксперимент без истории" (Cyrillic + colon + spaces)
+    crashed both download endpoints with an opaque internal_error —
+    Starlette encodes response headers as latin-1, and a raw non-ASCII
+    Content-Disposition filename= blows that up deep inside
+    Response.__init__ (UnicodeEncodeError). content_disposition() (backend/
+    routers/experiments.py) now sends an ASCII-sanitized filename= fallback
+    plus the real name via RFC 5987's filename*=UTF-8''... The colon makes
+    this name invalid as a Windows directory component, so this only
+    exercises the DB-backed samples endpoints (no filesystem artifact dir
+    involved) — report downloads get the same content_disposition() fix,
+    covered separately (ASCII name) in test_experiment_reports_from_artifact_dir."""
+    import io
+    import re
+    import zipfile
+    from urllib.parse import quote, unquote
+
+    import pandas as pd
+
+    from abkit.db.repositories import AssignmentRepo
+
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    name = "PA: Тестовый эксперимент без истории"
+    exp = _make_experiment(name)
+    encoded_name = quote(name, safe="")
+
+    assignments = pd.DataFrame(
+        {
+            "unit_id": ["u1", "u2"],
+            "group": ["control", "treatment"],
+            "stratum": [None, None],
+            "assigned_at": pd.Timestamp.now(tz="UTC"),
+        }
+    )
+    AssignmentRepo().bulk_insert(exp.id, assignments)
+
+    def _decoded_filename_star(header: str) -> str:
+        match = re.search(r"filename\*=UTF-8''([^;]+)", header)
+        assert match, f"no filename*=UTF-8'' in {header!r}"
+        return unquote(match.group(1))
+
+    zip_resp = app_client.get(f"/api/v1/experiments/{encoded_name}/samples.zip")
+    assert zip_resp.status_code == 200, zip_resp.text
+    disposition = zip_resp.headers["content-disposition"]
+    assert _decoded_filename_star(disposition) == f"{name}_samples.zip"
+    # Plain filename= fallback must be pure ASCII, or this response itself
+    # would fail to encode the same way the original bug did.
+    fallback = re.search(r'filename="([^"]+)"', disposition).group(1)
+    fallback.encode("ascii")  # raises if not ASCII-safe
+    assert ":" not in fallback
+    with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+        assert set(zf.namelist()) == {"control.csv", "treatment.csv"}
+
+    csv_resp = app_client.get(f"/api/v1/experiments/{encoded_name}/samples/control.csv")
+    assert csv_resp.status_code == 200, csv_resp.text
+    assert _decoded_filename_star(csv_resp.headers["content-disposition"]) == "control.csv"
+
+    missing_csv = app_client.get(f"/api/v1/experiments/{encoded_name}/samples/missing.csv")
+    assert missing_csv.status_code == 404
 
 
 def test_get_results_404_then_returns_latest(app_client):

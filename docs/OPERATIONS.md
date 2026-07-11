@@ -222,6 +222,17 @@ docker compose logs -f nginx
 `ABKIT_LOG_FORMAT=text` в `.env` переключает `backend` на человекочитаемый
 формат для отладки на живую руку.
 
+Любая неожиданная (не 4xx-валидационная) ошибка API отвечает пользователю
+`{"error": {"code": "internal_error", "message": "Internal processing error
+(ref: <8 hex-символов>)", "details": {"error_id": "<то же самое>"}}}` — этот
+`error_id` пишется и в лог рядом со структурированным traceback'ом
+(`"msg": "unhandled_exception"`), так что по сообщению из UI можно сразу
+найти нужную строку без перебора логов по времени запроса:
+
+```bash
+docker compose logs backend | grep <error_id>
+```
+
 ### Healthchecks
 
 ```bash

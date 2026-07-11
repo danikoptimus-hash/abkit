@@ -9,10 +9,12 @@ app.py::_render_experiment_detail_panel, которая берет данные 
 from __future__ import annotations
 
 import io
+import re
 import uuid as uuid_mod
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 from fastapi import APIRouter, Depends, Query
@@ -62,6 +64,32 @@ def _to_tag_out(t) -> TagOut:
 
 def _artifact_dir(name: str) -> Path:
     return DbExperimentStore().data_dir / name
+
+
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _ascii_fallback_filename(filename: str) -> str:
+    """Best-effort ASCII-only fallback for Content-Disposition's plain
+    filename= parameter — clients too old to understand RFC 5987's
+    filename*=UTF-8'' (see content_disposition() below) fall back to this,
+    so it must never contain a raw non-ASCII byte or a character invalid in
+    Windows/macOS/Linux filenames (e.g. the ':' in an experiment name)."""
+    ascii_only = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    sanitized = _UNSAFE_FILENAME_CHARS.sub("_", ascii_only).strip(" .")
+    return sanitized or "download"
+
+
+def content_disposition(filename: str, *, disposition: str = "attachment") -> str:
+    """Content-Disposition header value safe for ANY filename, including
+    non-ASCII ones (experiment names are free-text and often Cyrillic —
+    Starlette encodes headers as latin-1, so a raw non-ASCII filename=
+    crashes deep inside Response.__init__ with an opaque UnicodeEncodeError,
+    surfacing to the user as an unhelpful internal_error). Sends both: an
+    ASCII-sanitized filename= for old clients, and the real UTF-8 name via
+    RFC 5987's filename*= for everything modern (every current browser)."""
+    encoded = quote(filename, safe="")
+    return f'{disposition}; filename="{_ascii_fallback_filename(filename)}"; filename*=UTF-8\'\'{encoded}'
 
 
 def _get_experiment_or_404(name: str):
@@ -286,7 +314,7 @@ def get_report(
     if download:
         return Response(
             content=content, media_type="text/html",
-            headers={"Content-Disposition": f'attachment; filename="{name}_{report_name}"'},
+            headers={"Content-Disposition": content_disposition(f"{name}_{report_name}")},
         )
     return HTMLResponse(content=content)
 
@@ -334,7 +362,7 @@ def download_sample(name: str, filename: str, user: CurrentUser = Depends(get_cu
         raise APIError(404, "not_found", f"File '{filename}' not found")
     return Response(
         content=_group_csv_bytes(group_df), media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition(filename)},
     )
 
 
@@ -351,7 +379,7 @@ def download_samples_zip(name: str, user: CurrentUser = Depends(get_current_user
     buffer.seek(0)
     return StreamingResponse(
         buffer, media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{name}_samples.zip"'},
+        headers={"Content-Disposition": content_disposition(f"{name}_samples.zip")},
     )
 
 
