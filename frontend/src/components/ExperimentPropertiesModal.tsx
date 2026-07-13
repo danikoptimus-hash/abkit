@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, Spin, Alert } from 'antd'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
 
 interface Props {
   name: string | null
@@ -28,12 +30,13 @@ const ROLE_OPTIONS = [
 // role. Opened from the "..." menu on the experiment page and from the
 // hover Edit button in the experiments list.
 export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
+  const queryClient = useQueryClient()
   const [form] = Form.useForm<FormValues>()
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const { data: properties, isLoading } = useQuery({
-    queryKey: ['experiment-properties', name],
+    queryKey: queryKeys.experimentProperties(name),
     enabled: name !== null,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/properties', {
@@ -45,7 +48,7 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
   })
 
   const { data: users } = useQuery({
-    queryKey: ['users-picker'],
+    queryKey: queryKeys.usersPicker(),
     enabled: name !== null,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/users')
@@ -67,7 +70,7 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
 
   const [tagSearch, setTagSearch] = useState('')
   const { data: tagOptions } = useQuery({
-    queryKey: ['tags-typeahead', tagSearch],
+    queryKey: queryKeys.tagsTypeahead(tagSearch),
     enabled: name !== null,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/tags', { params: { query: { q: tagSearch || undefined } } })
@@ -121,14 +124,32 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
         tagNames.map(async (tagName) => {
           const { data, error } = await apiClient.POST('/api/v1/tags', { body: { name: tagName } })
           if (error) throw new Error(errorMessage(error))
-          return data.id
+          return data
         }),
       )
       const { error: tagsError } = await apiClient.PUT('/api/v1/experiments/{name}/tags', {
         params: { path: { name: values.name } },
-        body: { tag_ids: resolvedTags },
+        body: { tag_ids: resolvedTags.map((t) => t.id) },
       })
       if (tagsError) throw new Error(errorMessage(tagsError))
+
+      // UX contract, part B: this is the exact bug that motivated the
+      // cache-invalidation audit — a brand-new tag typed here previously
+      // never showed up in the experiments list's tag filter without a full
+      // reload, because nothing ever invalidated (or updated)
+      // tagsTypeahead's cache. Optimistically splice any newly-seen tags
+      // into every cached typeahead result NOW (immediate, no flicker),
+      // then invalidate too (covers search strings not currently cached, and
+      // reconciles if the optimistic guess above turns out stale).
+      queryClient.setQueriesData<{ id: string; name: string }[]>(
+        { queryKey: queryKeys.tagsTypeaheadAll() },
+        (old) => {
+          const known = new Set((old ?? []).map((t) => t.id))
+          const additions = resolvedTags.filter((t) => !known.has(t.id))
+          return additions.length ? [...(old ?? []), ...additions] : old
+        },
+      )
+      queryClient.invalidateQueries({ queryKey: queryKeys.tagsTypeaheadAll() })
 
       onSaved(values.name)
     } catch (e) {
@@ -146,27 +167,22 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
     const bb = [...(b ?? [])].sort()
     return aa.length === bb.length && aa.every((v, i) => v === bb[i])
   }
+  // name !== null gate: this component stays mounted across open/close
+  // (both callers render it unconditionally, toggling only the `name`
+  // prop) — Form.useForm()'s instance (and its useWatch values) outlives
+  // the Modal's own destroyOnHidden unmount, so without this gate isDirty
+  // could still read "true" from a just-discarded edit after the modal
+  // visually closes, keeping the shared hook's route-blocker wrongly armed.
   const isDirty =
+    name !== null &&
     !!properties &&
     (currentNameValue !== properties.name ||
       !arraysEqual(currentOwnerIds, properties.owners.map((u) => u.id)) ||
       !arraysEqual(currentEditorIds, properties.editors.map((u) => u.id)) ||
       !arraysEqual(currentVisibleRoles, properties.visible_roles) ||
       !arraysEqual(currentTags, properties.tags.map((t) => t.name)))
-  const guardedCancel = () => {
-    if (!isDirty) {
-      onCancel()
-      return
-    }
-    Modal.confirm({
-      title: 'You have unsaved changes',
-      content: 'Discard them?',
-      okText: 'Discard',
-      okButtonProps: { danger: true },
-      cancelText: 'Keep editing',
-      onOk: onCancel,
-    })
-  }
+  const { guard } = useUnsavedGuard(isDirty)
+  const guardedCancel = () => guard(onCancel)
 
   return (
     <Modal

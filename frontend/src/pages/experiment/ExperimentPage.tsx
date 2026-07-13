@@ -6,12 +6,14 @@ import {
   EditOutlined, SaveOutlined, CloseOutlined, MoreOutlined, DeleteOutlined, SettingOutlined, ExperimentOutlined,
 } from '@ant-design/icons'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { DeleteExperimentModal } from '../../components/DeleteExperimentModal'
 import { ExperimentPropertiesModal } from '../../components/ExperimentPropertiesModal'
 import { LifecycleDates } from '../../components/LifecycleDates'
 import { RelativeTime } from '../../components/RelativeTime'
 import { TagList } from '../../components/TagBadge'
 import { PRODUCT_NAME } from '../../branding'
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard'
 import { DesignSection } from './DesignSection'
 import { AnalyzeSection } from './AnalyzeSection'
 import { ResultsSection } from './ResultsSection'
@@ -163,7 +165,7 @@ export function ExperimentPage() {
   }
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['experiment', name],
+    queryKey: queryKeys.experiment(name!),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}', { params: { path: { name: name! } } })
       if (error) throw new Error(errorMessage(error))
@@ -172,7 +174,7 @@ export function ExperimentPage() {
   })
 
   const { data: blocks } = useQuery({
-    queryKey: ['experiment-blocks', name],
+    queryKey: queryKeys.experimentBlocks(name!),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/blocks', { params: { path: { name: name! } } })
       if (error) throw new Error(errorMessage(error))
@@ -200,38 +202,27 @@ export function ExperimentPage() {
   const isDirty =
     editing && (draftName !== pristineName || JSON.stringify(draftBlocks) !== JSON.stringify(pristineBlocks))
 
-  // Item 1.2: browser tab close/reload — only wired up while there's
-  // something to lose, per the ask (a dirty-flag comparison against the
-  // snapshot above, not "always on while editing").
-  useEffect(() => {
-    if (!isDirty) return
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      e.returnValue = ''
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [isDirty])
+  // UX contract, part A: beforeunload + route-navigation (nav links, browser
+  // back, programmatic navigate) blocking both come from the shared hook now
+  // — this used to be a hand-rolled beforeunload effect with no route
+  // protection at all (frontend/src/hooks/useUnsavedGuard.ts).
+  const { guard } = useUnsavedGuard(isDirty)
 
   // Item 1.1: internal navigation away from a dirty edit (tabs, tag-badge
   // links, the Discard button itself) all funnel through here instead of
-  // running `action` directly — Modal.confirm is a no-op passthrough when
-  // there's nothing to lose, so callers don't need their own dirty check.
+  // running `action` directly — the hook's guard() is a no-op passthrough
+  // when there's nothing to lose, so callers don't need their own dirty
+  // check. Preserves the pre-refactor behavior of only resetting `editing`
+  // on the CONFIRMED-discard path, not the passthrough one (the passthrough
+  // path only runs when isDirty is already false, i.e. nothing to reset).
   const confirmDiscardIfDirty = (action: () => void) => {
     if (!isDirty) {
       action()
       return
     }
-    Modal.confirm({
-      title: 'You have unsaved changes',
-      content: 'Discard them?',
-      okText: 'Discard',
-      okButtonProps: { danger: true },
-      cancelText: 'Keep editing',
-      onOk: () => {
-        setEditing(false)
-        action()
-      },
+    guard(() => {
+      setEditing(false)
+      action()
     })
   }
 
@@ -260,9 +251,9 @@ export function ExperimentPage() {
       message.success('Saved')
       setEditing(false)
       const finalName = draftName !== name ? draftName : name
-      queryClient.invalidateQueries({ queryKey: ['experiment', finalName] })
-      queryClient.invalidateQueries({ queryKey: ['experiment-blocks', finalName] })
-      queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.experiment(finalName) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.experimentBlocks(finalName) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
       if (finalName !== name) {
         window.location.href = `/experiments/${finalName}`
       }
@@ -283,7 +274,13 @@ export function ExperimentPage() {
       message.error(errorMessage(error))
       return
     }
-    queryClient.invalidateQueries({ queryKey: ['experiment', name] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.experiment(name) })
+    // UX contract, part B: the list's own Status column reads a separately
+    // cached ['experiments', ...] query — this used to invalidate only the
+    // single-experiment detail query, leaving the list showing a stale
+    // status badge if it's still mounted (e.g. this page was reached
+    // without unmounting the list, or the user has both open).
+    queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
   }
 
   const startRedesign = async () => {
@@ -315,15 +312,24 @@ export function ExperimentPage() {
   const handleTogglePublication = async () => {
     if (!name || !data) return
     const to = data.publication_status === 'published' ? 'draft' : 'published'
+    // UX contract, part B: optimistic update — this is a one-click toggle
+    // (PublicationBadge is both indicator and control), so it should flip
+    // instantly rather than wait a round trip; rolled back on failure.
+    const previous = queryClient.getQueryData(queryKeys.experiment(name))
+    queryClient.setQueryData(queryKeys.experiment(name), (old: typeof data | undefined) =>
+      old ? { ...old, publication_status: to } : old,
+    )
     const { error } = await apiClient.PATCH('/api/v1/experiments/{name}', {
       params: { path: { name } },
       body: { publication_status: to },
     })
     if (error) {
+      queryClient.setQueryData(queryKeys.experiment(name), previous)
       message.error(errorMessage(error))
       return
     }
-    queryClient.invalidateQueries({ queryKey: ['experiment', name] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.experiment(name) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
   }
 
   if (isLoading) return <Spin size="large" />
@@ -501,8 +507,8 @@ export function ExperimentPage() {
         onCancel={() => setPropertiesTarget(null)}
         onSaved={(newName) => {
           setPropertiesTarget(null)
-          queryClient.invalidateQueries({ queryKey: ['experiments'] })
-          queryClient.invalidateQueries({ queryKey: ['experiment', name] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
+          queryClient.invalidateQueries({ queryKey: queryKeys.experiment(name) })
           if (newName !== name) {
             window.location.href = `/experiments/${newName}`
           }

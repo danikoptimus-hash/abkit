@@ -4,6 +4,7 @@ import { ThunderboltOutlined, ReloadOutlined, CheckCircleOutlined } from '@ant-d
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { useJobPolling } from '../../api/useJobPolling'
 import { DatasetSelect } from '../../components/DatasetSelect'
 import { AnalyzeResults } from './AnalyzeResults'
@@ -99,7 +100,7 @@ export function AnalyzeSection({
   // time groupColumn changes so the mapping selects below always reflect
   // the CURRENTLY selected dataset+column, not a stale one.
   const { data: columnValues, isFetching: columnValuesLoading } = useQuery({
-    queryKey: ['dataset-column-values', prepared?.id, groupColumn],
+    queryKey: queryKeys.datasetColumnValues(prepared?.id, groupColumn),
     enabled: isExternal && !!prepared && !!groupColumn,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/column-values', {
@@ -122,7 +123,7 @@ export function AnalyzeSection({
   // failed job). Not applicable to external-split experiments (no unit_col
   // join at all in that flow).
   const { data: duplicateCheck } = useQuery({
-    queryKey: ['dataset-duplicate-check', prepared?.id, unitCol],
+    queryKey: queryKeys.datasetDuplicateCheck(prepared?.id, unitCol),
     enabled: !isExternal && !!prepared && !!unitCol,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/duplicate-check', {
@@ -165,6 +166,11 @@ export function AnalyzeSection({
       })
       if (error) throw new Error(errorMessage(error))
       setPrepared({ id: data.id, filename: data.filename, nRows: data.n_rows, columns: data.columns, isDemo: true })
+      // UX contract, part B: this persists a real dataset row (source=demo)
+      // — it should show up in the Datasets list/select without a reload,
+      // same as any other dataset creation path.
+      queryClient.invalidateQueries({ queryKey: queryKeys.datasetsAll() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.datasetsForSelect() })
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : 'Failed to generate demo data')
     } finally {
@@ -190,6 +196,13 @@ export function AnalyzeSection({
     }
     await poll(data.job_id)
     await queryClient.invalidateQueries({ queryKey: experimentResultsQueryKey(experimentName) })
+    // UX contract, part B: a completed analysis also changes fields the
+    // experiment detail query exposes (lifecycle dates, "Last modified") and
+    // the list's "Last Modified" column — this used to only invalidate the
+    // results query, leaving those stale if their pages/components stay
+    // mounted.
+    queryClient.invalidateQueries({ queryKey: queryKeys.experiment(experimentName) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
     setPanelOverride(false)
   }
 

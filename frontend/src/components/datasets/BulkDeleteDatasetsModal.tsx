@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Modal, Typography, Form, Input, List, Alert, Spin } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import type { components } from '../../api/schema'
 
 type DatasetOut = components['schemas']['DatasetOut']
@@ -34,7 +35,7 @@ export function BulkDeleteDatasetsModal({ datasets, onCancel, onDone }: Props) {
 
   const ids = datasets?.map((d) => d.id) ?? []
   const { data: usageData, isFetching: usageLoading } = useQuery({
-    queryKey: ['datasets-bulk-usage', ids],
+    queryKey: queryKeys.datasetsBulkUsage(ids),
     enabled: datasets !== null && ids.length > 0,
     queryFn: async () => {
       const entries = await Promise.all(

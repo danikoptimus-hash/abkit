@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { RelativeTime } from '../components/RelativeTime'
 import { SourceTag } from '../components/DatasetSelect'
 import { CreateDatasetModal } from './datasets/CreateDatasetModal'
@@ -45,13 +46,13 @@ function useRefreshDataset(datasetId: string) {
       }
       if (job?.status === 'completed') {
         message.success(`Refreshed: ${(job.result as { n_rows: number } | null)?.n_rows ?? '?'} rows`)
-        queryClient.invalidateQueries({ queryKey: ['datasets'] })
-        queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.datasetsAll() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.datasetsForSelect() })
         // The drawer's preview rows/columns (a separate query, keyed by
         // dataset id) also need to reflect the fresh data — UX package,
         // Datasets п.1.3: "обновленные fetched_at и структура колонок
         // видны в drawer" after Refresh.
-        queryClient.invalidateQueries({ queryKey: ['dataset-preview', datasetId] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.datasetPreview(datasetId) })
       } else {
         message.error(job?.error ?? 'Refresh failed')
       }
@@ -259,7 +260,7 @@ export function DatasetsPage() {
   }, [debouncedQ, source])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['datasets', page, debouncedQ, source],
+    queryKey: queryKeys.datasets(page, debouncedQ, source),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets', {
         params: { query: { page, page_size: pageSize, q: debouncedQ || undefined, source } },
@@ -270,7 +271,7 @@ export function DatasetsPage() {
   })
 
   const { data: preview, isFetching: previewLoading } = useQuery({
-    queryKey: ['dataset-preview', previewId],
+    queryKey: queryKeys.datasetPreview(previewId),
     enabled: previewId !== null,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/preview', {
@@ -288,8 +289,8 @@ export function DatasetsPage() {
   const canEditDataset = (record: DatasetOut) => isAdmin || (!!user && record.uploaded_by === user.id)
 
   const invalidateAfterDelete = () => {
-    queryClient.invalidateQueries({ queryKey: ['datasets'] })
-    queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.datasetsAll() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.datasetsForSelect() })
     if (previewId) setPreviewId(null)
   }
 

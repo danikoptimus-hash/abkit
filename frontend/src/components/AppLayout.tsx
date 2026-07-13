@@ -4,7 +4,9 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
 import { apiClient } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { PRODUCT_NAME } from '../branding'
+import { UnsavedGuardProvider } from '../hooks/useUnsavedGuard'
 import logo from '../assets/logo.png'
 
 const { Header, Content } = Layout
@@ -26,7 +28,7 @@ export function AppLayout() {
   const selectedKey = NAV_ITEMS.find((item) => location.pathname.startsWith(item.key))?.key ?? ''
 
   const { data: version } = useQuery({
-    queryKey: ['version'],
+    queryKey: queryKeys.version(),
     queryFn: async () => {
       const { data } = await apiClient.GET('/api/v1/version')
       return data
@@ -103,7 +105,9 @@ export function AppLayout() {
         )}
       </Header>
       <Content style={{ padding: 24 }}>
-        <Outlet />
+        <UnsavedGuardProvider>
+          <Outlet />
+        </UnsavedGuardProvider>
       </Content>
     </Layout>
   )

@@ -4,6 +4,7 @@ import { Table, Input, Select, Button, Tag, Space, message, Tooltip, Modal } fro
 import { PlusOutlined, EditOutlined, DeleteOutlined, CheckSquareOutlined, CloseOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { useAuth, hasMinRole } from '../auth/AuthContext'
 import { DeleteExperimentModal } from '../components/DeleteExperimentModal'
 import { ExperimentPropertiesModal } from '../components/ExperimentPropertiesModal'
@@ -52,7 +53,7 @@ export function ExperimentsListPage() {
   }, [debouncedQ, status, tagIds])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['experiments', { q: debouncedQ, status, tagIds, page }],
+    queryKey: queryKeys.experiments({ q: debouncedQ, status, tagIds, page }),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments', {
         params: {
@@ -70,7 +71,7 @@ export function ExperimentsListPage() {
   // more than one is selected (enforced server-side, GET /experiments?tag=).
   const [tagFilterSearch, setTagFilterSearch] = useState('')
   const { data: tagFilterOptions } = useQuery({
-    queryKey: ['tags-typeahead', tagFilterSearch],
+    queryKey: queryKeys.tagsTypeahead(tagFilterSearch),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/tags', {
         params: { query: { q: tagFilterSearch || undefined } },
@@ -96,7 +97,7 @@ export function ExperimentsListPage() {
   const [selectedNames, setSelectedNames] = useState<string[]>([])
   const [bulkDeleteTarget, setBulkDeleteTarget] = useState<string[] | null>(null)
 
-  const refreshList = () => queryClient.invalidateQueries({ queryKey: ['experiments'] })
+  const refreshList = () => queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
 
   const exitBulkMode = () => {
     setBulkMode(false)

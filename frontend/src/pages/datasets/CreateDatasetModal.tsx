@@ -1,10 +1,12 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal, Tabs, Upload, Button, Alert, Select, Input, Progress, Typography, Spin } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UploadProps } from 'antd'
 import { apiClient, errorMessage, toFormData } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { useJobPolling } from '../../api/useJobPolling'
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard'
 import { SchemaTableCascade } from '../../components/datasets/SchemaTableCascade'
 import { QueryResultPreview } from '../../components/datasets/QueryResultPreview'
 import { buildSelectAllSql } from '../../components/datasets/parseSchemaTableFromSql'
@@ -62,7 +64,7 @@ function UploadTab({ onDone }: { onDone: () => void }) {
   )
 }
 
-function FromSqlTab({ onDone }: { onDone: () => void }) {
+function FromSqlTab({ onDone, onDirtyChange }: { onDone: () => void; onDirtyChange: (dirty: boolean) => void }) {
   const [connectionId, setConnectionId] = useState<string | undefined>(undefined)
   const [schema, setSchema] = useState<string | undefined>(undefined)
   const [table, setTable] = useState<string | undefined>(undefined)
@@ -72,8 +74,19 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
 
   const { phase, stage, error, poll, reset } = useJobPolling<{ dataset_id: string; n_rows: number; truncated: boolean }>()
 
+  // UX contract, part A: this tab's state is local (not lifted), but the
+  // parent modal's close guard needs to know about it — reported up via
+  // callback rather than lifting connectionId/schema/table/sql/name
+  // themselves, which would ripple through every handler in this file for
+  // no benefit beyond the single boolean the parent actually needs. AntD
+  // Tabs keeps inactive panes mounted (no destroyInactiveTabPane), so this
+  // stays accurate even after switching to the Upload tab without closing.
+  useEffect(() => {
+    onDirtyChange(!!connectionId || !!sql.trim() || !!name.trim())
+  }, [connectionId, sql, name, onDirtyChange])
+
   const { data: connections, isFetching: connectionsLoading } = useQuery({
-    queryKey: ['db-connections-for-sql-dataset'],
+    queryKey: queryKeys.dbConnectionsForSqlDataset(),
     queryFn: async () => {
       const { data } = await apiClient.GET('/api/v1/admin/db-connections')
       return data ?? []
@@ -187,19 +200,28 @@ function FromSqlTab({ onDone }: { onDone: () => void }) {
 
 export function CreateDatasetModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const queryClient = useQueryClient()
+  const [sqlTabDirty, setSqlTabDirty] = useState(false)
+  // open gate: this component unmounts on close (destroyOnHidden, and the
+  // parent renders it conditionally too — see Datasets.tsx), so in practice
+  // sqlTabDirty always resets to false on the next open; kept explicit
+  // anyway to match the same defensive pattern used in the other guarded
+  // modals (EditDatasetModal/ExperimentPropertiesModal).
+  const isDirty = open && sqlTabDirty
+  const { guard } = useUnsavedGuard(isDirty)
+  const guardedClose = () => guard(onClose)
 
   const handleDone = () => {
-    queryClient.invalidateQueries({ queryKey: ['datasets'] })
-    queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.datasetsAll() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.datasetsForSelect() })
     onClose()
   }
 
   return (
-    <Modal title="New dataset" open={open} onCancel={onClose} footer={null} width={640} destroyOnHidden>
+    <Modal title="New dataset" open={open} onCancel={guardedClose} footer={null} width={640} destroyOnHidden>
       <Tabs
         items={[
           { key: 'upload', label: 'Upload file', children: <UploadTab onDone={handleDone} /> },
-          { key: 'sql', label: 'From SQL', children: <FromSqlTab onDone={handleDone} /> },
+          { key: 'sql', label: 'From SQL', children: <FromSqlTab onDone={handleDone} onDirtyChange={setSqlTabDirty} /> },
         ]}
       />
     </Modal>

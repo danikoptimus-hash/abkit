@@ -1,6 +1,7 @@
 import { Select, Tag } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { formatRelativeTime } from '../dateFormat'
 
 const SOURCE_LABELS: Record<string, string> = { upload: 'Upload', sql: 'SQL', demo: 'Demo' }
@@ -34,7 +35,7 @@ export function DatasetSelect({
   ariaLabel?: string
 }) {
   const { data, isFetching } = useQuery({
-    queryKey: ['datasets-for-select'],
+    queryKey: queryKeys.datasetsForSelect(),
     queryFn: async () => {
       const { data } = await apiClient.GET('/api/v1/datasets', { params: { query: { page_size: 200 } } })
       return data?.items ?? []

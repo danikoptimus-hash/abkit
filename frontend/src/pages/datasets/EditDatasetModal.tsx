@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Modal, Typography, Input, Select, Button, Alert, Progress, Space, Collapse, Tabs } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { useJobPolling } from '../../api/useJobPolling'
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard'
 import type { components } from '../../api/schema'
 import { SchemaTableCascade } from '../../components/datasets/SchemaTableCascade'
 import { QueryResultPreview } from '../../components/datasets/QueryResultPreview'
@@ -68,7 +70,7 @@ export function EditDatasetModal({
   }, [dataset?.id])
 
   const { data: connections } = useQuery({
-    queryKey: ['db-connections-for-sql-dataset'],
+    queryKey: queryKeys.dbConnectionsForSqlDataset(),
     enabled: !!isSql && open,
     queryFn: async () => {
       const { data } = await apiClient.GET('/api/v1/admin/db-connections')
@@ -77,7 +79,7 @@ export function EditDatasetModal({
   })
 
   const { data: usage } = useQuery({
-    queryKey: ['dataset-usage', dataset?.id],
+    queryKey: queryKeys.datasetUsage(dataset?.id),
     enabled: !!isSql && !!dataset && open,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/usage', {
@@ -88,9 +90,17 @@ export function EditDatasetModal({
     },
   })
 
-  if (!dataset) return null
+  // Computed before the `!dataset` early return below (rules of hooks —
+  // useUnsavedGuard must be called on every render, not skipped once
+  // `dataset` goes null) with an explicit `!!dataset` guard so isDirty
+  // correctly reads false once the modal has no dataset to edit, rather
+  // than throwing or reading stale true.
+  const sqlChanged =
+    !!dataset && isSql && (connectionId !== (dataset.connection_id ?? undefined) || sql !== (dataset.sql_text ?? ''))
+  const isDirty = !!dataset && open && (name.trim() !== dataset.filename || sqlChanged)
+  const { guard } = useUnsavedGuard(isDirty)
 
-  const sqlChanged = isSql && (connectionId !== (dataset.connection_id ?? undefined) || sql !== (dataset.sql_text ?? ''))
+  if (!dataset) return null
 
   const handleTableChange = (value: string | undefined) => {
     setTable(value)
@@ -142,11 +152,11 @@ export function EditDatasetModal({
         body,
       })
       if (error) throw new Error(errorMessage(error))
-      queryClient.invalidateQueries({ queryKey: ['datasets'] })
-      queryClient.invalidateQueries({ queryKey: ['datasets-for-select'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.datasetsAll() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.datasetsForSelect() })
       if (data.job_id) {
         const result = await poll(data.job_id)
-        queryClient.invalidateQueries({ queryKey: ['dataset-preview', dataset.id] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.datasetPreview(dataset.id) })
         if (!result) return // job failed — error already shown via useJobPolling's `error`
       }
       onClose()
@@ -178,21 +188,7 @@ export function EditDatasetModal({
   // Item 1.3: name change or (source=sql) a changed connection/query counts
   // as unsaved input — closing via the X/mask/Esc or the Cancel button all
   // go through AntD's onCancel, so guarding that one prop covers all three.
-  const isDirty = name.trim() !== dataset.filename || sqlChanged
-  const guardedClose = () => {
-    if (!isDirty) {
-      onClose()
-      return
-    }
-    Modal.confirm({
-      title: 'You have unsaved changes',
-      content: 'Discard them?',
-      okText: 'Discard',
-      okButtonProps: { danger: true },
-      cancelText: 'Keep editing',
-      onOk: onClose,
-    })
-  }
+  const guardedClose = () => guard(onClose)
 
   return (
     <Modal

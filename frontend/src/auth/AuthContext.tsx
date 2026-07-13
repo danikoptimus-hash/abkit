@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../api/client'
 import type { components } from '../api/schema'
 
@@ -18,6 +19,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
   const refresh = useCallback(async () => {
     const { data } = await apiClient.GET('/api/v1/auth/me')
@@ -41,7 +43,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await apiClient.POST('/api/v1/auth/logout')
     setUser(null)
-  }, [])
+    // B.1 audit gap: without this, a second user signing in on the same
+    // browser session could see the first user's cached experiments/
+    // datasets/admin data for a moment (or indefinitely, for staleTime:
+    // Infinity queries like `version`) before any of it happens to refetch.
+    queryClient.clear()
+  }, [queryClient])
 
   return (
     <AuthContext.Provider value={{ user, loading, login, logout, refresh }}>

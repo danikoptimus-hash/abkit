@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Table, Input, Typography, Space } from 'antd'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { RelativeTime } from '../components/RelativeTime'
 
 export function AuditPage() {
@@ -11,7 +12,7 @@ export function AuditPage() {
   const pageSize = 50
 
   const { data, isLoading } = useQuery({
-    queryKey: ['audit', { user, action, page }],
+    queryKey: queryKeys.audit({ user, action, page }),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/audit', {
         params: { query: { user: user || undefined, action: action || undefined, page, page_size: pageSize } },

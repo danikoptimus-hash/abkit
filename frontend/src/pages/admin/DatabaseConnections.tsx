@@ -5,6 +5,8 @@ import {
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
+import { useUnsavedGuard } from '../../hooks/useUnsavedGuard'
 import { RelativeTime } from '../../components/RelativeTime'
 import type { components } from '../../api/schema'
 
@@ -93,9 +95,13 @@ export function DatabaseConnectionsPage() {
   const [modalConn, setModalConn] = useState<DatabaseConnectionOut | 'new' | null>(null)
   const [form] = Form.useForm<ConnectionFormValues>()
   const [saving, setSaving] = useState(false)
+  // UX contract, part A — same pristine-snapshot pattern as Admin.tsx's user
+  // modal: captured alongside the form's own setFieldsValue in openEdit/
+  // openCreate, compared against Form.useWatch's live values below.
+  const [pristine, setPristine] = useState<Partial<ConnectionFormValues> | null>(null)
 
   const { data: connections, isLoading } = useQuery({
-    queryKey: ['admin-db-connections'],
+    queryKey: queryKeys.adminDbConnections(),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/admin/db-connections')
       if (error) throw new Error(errorMessage(error))
@@ -110,18 +116,22 @@ export function DatabaseConnectionsPage() {
 
   const openEdit = (conn: DatabaseConnectionOut) => {
     setModalConn(conn)
-    form.setFieldsValue({
+    const values = {
       display_name: conn.display_name, engine: conn.engine as Engine, host: conn.host, port: conn.port,
       database: conn.database, username: conn.username, password: undefined,
       extra_params: conn.extra_params ? JSON.stringify(conn.extra_params, null, 2) : '',
       ssl: conn.ssl,
-    })
+    }
+    form.setFieldsValue(values)
+    setPristine(values)
   }
 
   const openCreate = () => {
     setModalConn('new')
     form.resetFields()
-    form.setFieldsValue({ engine: 'postgresql', port: DEFAULT_PORTS.postgresql.plain, ssl: false })
+    const values = { engine: 'postgresql' as Engine, port: DEFAULT_PORTS.postgresql.plain, ssl: false }
+    form.setFieldsValue(values)
+    setPristine(values)
   }
 
   const handleSave = async () => {
@@ -159,13 +169,42 @@ export function DatabaseConnectionsPage() {
       }
       message.success('Saved')
       setModalConn(null)
-      queryClient.invalidateQueries({ queryKey: ['admin-db-connections'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminDbConnections() })
+      // Audit gap fix (B.1): the dataset-creation connection picker
+      // (CreateDatasetModal/EditDatasetModal) reads a separate cache key
+      // for the same backend list — without this, a newly added connection
+      // doesn't show up there until an unrelated remount.
+      queryClient.invalidateQueries({ queryKey: queryKeys.dbConnectionsForSqlDataset() })
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Failed to save')
     } finally {
       setSaving(false)
     }
   }
+
+  const currentDisplayName = Form.useWatch('display_name', form)
+  const currentEngine = Form.useWatch('engine', form)
+  const currentHost = Form.useWatch('host', form)
+  const currentPort = Form.useWatch('port', form)
+  const currentDatabase = Form.useWatch('database', form)
+  const currentUsername = Form.useWatch('username', form)
+  const currentPassword = Form.useWatch('password', form)
+  const currentExtraParams = Form.useWatch('extra_params', form)
+  const currentSsl = Form.useWatch('ssl', form)
+  const isDirty =
+    modalConn !== null &&
+    !!pristine &&
+    (currentDisplayName !== pristine.display_name ||
+      currentEngine !== pristine.engine ||
+      currentHost !== pristine.host ||
+      currentPort !== pristine.port ||
+      currentDatabase !== pristine.database ||
+      currentUsername !== pristine.username ||
+      currentPassword !== pristine.password ||
+      currentExtraParams !== pristine.extra_params ||
+      currentSsl !== pristine.ssl)
+  const { guard } = useUnsavedGuard(isDirty)
+  const guardedCancel = () => guard(() => setModalConn(null))
 
   const handleTestSaved = async (conn: DatabaseConnectionOut) => {
     const { data, error } = await apiClient.POST('/api/v1/admin/db-connections/{conn_id}/test', {
@@ -197,7 +236,8 @@ export function DatabaseConnectionsPage() {
           return
         }
         message.success('Deleted')
-        queryClient.invalidateQueries({ queryKey: ['admin-db-connections'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.adminDbConnections() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.dbConnectionsForSqlDataset() })
       },
     })
   }
@@ -251,7 +291,7 @@ export function DatabaseConnectionsPage() {
       <Modal
         title={modalConn === 'new' ? 'New Database Connection' : `Edit ${(modalConn as DatabaseConnectionOut)?.display_name ?? ''}`}
         open={modalConn !== null}
-        onCancel={() => setModalConn(null)}
+        onCancel={guardedCancel}
         onOk={handleSave}
         confirmLoading={saving}
         width={560}

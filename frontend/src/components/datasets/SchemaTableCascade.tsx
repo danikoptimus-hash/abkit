@@ -3,6 +3,7 @@ import { Typography, Select, Button, Space, Tooltip } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 
 // Shared by the "From SQL" create form and the Edit dataset modal (UX
 // package, Datasets §3 — "сегодняшний баг — ровно следствие дублирования"):
@@ -45,7 +46,7 @@ export function SchemaTableCascade({
   const {
     data: schemas, isFetching: schemasLoading, refetch: refetchSchemas,
   } = useQuery({
-    queryKey: ['db-connection-schemas', connectionId],
+    queryKey: queryKeys.dbConnectionSchemas(connectionId),
     enabled: !!connectionId,
     queryFn: async () => {
       const refresh = forceRefreshSchemas.current
@@ -61,7 +62,7 @@ export function SchemaTableCascade({
   const {
     data: tables, isFetching: tablesLoading, refetch: refetchTables,
   } = useQuery({
-    queryKey: ['db-connection-tables', connectionId, schema],
+    queryKey: queryKeys.dbConnectionTables(connectionId, schema),
     enabled: !!connectionId && !!schema,
     queryFn: async () => {
       const refresh = forceRefreshTables.current

@@ -5,6 +5,7 @@ import { Typography, Select, Button, InputNumber, Checkbox, Alert, Progress, Tab
 import { CheckCircleOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import { useJobPolling } from '../api/useJobPolling'
 import { DatasetSelect } from '../components/DatasetSelect'
 import { RelativeTime } from '../components/RelativeTime'
@@ -119,7 +120,7 @@ export function ValidationPage() {
   const { phase, stage, error, result, poll, reset } = useJobPolling<ValidateResult>()
 
   const { data: experiments } = useQuery({
-    queryKey: ['experiments-for-validation'],
+    queryKey: queryKeys.experimentsForValidation(),
     queryFn: async () => {
       const { data } = await apiClient.GET('/api/v1/experiments', { params: { query: { page_size: 200 } } })
       return data?.items ?? []
@@ -127,7 +128,7 @@ export function ValidationPage() {
   })
 
   const { data: experimentDetail } = useQuery({
-    queryKey: ['experiment-for-validation', experimentName],
+    queryKey: queryKeys.experimentForValidation(experimentName),
     enabled: !!experimentName,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}', { params: { path: { name: experimentName! } } })
@@ -140,7 +141,7 @@ export function ValidationPage() {
   // already stored for this experiment, if any — 404 means none stored
   // (older/imported experiments, п.C.4), not an error to surface loudly.
   const { data: designDataset, isFetching: designDatasetLoading } = useQuery({
-    queryKey: ['experiment-design-dataset', experimentName],
+    queryKey: queryKeys.experimentDesignDataset(experimentName),
     enabled: !!experimentName,
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/design-dataset', {

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { Typography, Button, Descriptions, Alert, Progress, Space, Tag, message } from 'antd'
 import { apiClient, errorMessage, toFormData } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { getColumns } from './FlowImagesSection'
 import { buildDesignConfig, buildExternalDesignConfig, groupsToApi, metricsToApi } from './types'
 import type { WizardState } from './types'
@@ -101,12 +103,21 @@ interface Props {
   // — submits to POST .../redesign (in-place replace) instead of POST
   // /design (always-create). Job result shape is identical either way.
   redesignName?: string
+  // UX contract, part A: DesignWizardPage's route-blocker (useUnsavedGuard)
+  // treats any WizardState different from its pristine snapshot as unsaved
+  // work worth confirming before leaving — including the navigate() below,
+  // which otherwise looks identical to the user clicking a nav link mid-
+  // wizard. Calling this right before navigate() tells the parent "this
+  // work is now saved", so its own isDirty flips false in time for the
+  // blocker to let this specific navigation through unprompted.
+  onSubmitted: () => void
 }
 
 type Phase = 'idle' | 'running' | 'requires_confirmation' | 'failed'
 
-export function Step4Review({ state, redesignName }: Props) {
+export function Step4Review({ state, redesignName, onSubmitted }: Props) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [phase, setPhase] = useState<Phase>('idle')
   const [stage, setStage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -144,6 +155,18 @@ export function Step4Review({ state, redesignName }: Props) {
           if (hasFlowImageWork) {
             await saveFlowImages(experimentName, state)
           }
+          // B.3: explicit invalidation rather than relying solely on the
+          // navigate()-triggered remount below — the list this experiment
+          // now belongs to (new row, or redesign changing its config) must
+          // not show stale data if anything stays mounted across this nav
+          // (e.g. a background tab keeping ExperimentsList alive).
+          queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
+          if (redesignName) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.experiment(redesignName) })
+            queryClient.invalidateQueries({ queryKey: queryKeys.experimentBlocks(redesignName) })
+            queryClient.invalidateQueries({ queryKey: queryKeys.experimentDesignDataset(redesignName) })
+          }
+          onSubmitted()
           navigate(`/experiments/${experimentName}`)
         }
         return

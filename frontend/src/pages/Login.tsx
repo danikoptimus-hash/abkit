@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
 import logo from '../assets/logo.png'
 import { PRODUCT_NAME } from '../branding'
 
@@ -83,7 +84,7 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
 
   const { data: config } = useQuery({
-    queryKey: ['auth-config'],
+    queryKey: queryKeys.authConfig(),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/auth/config')
       if (error) throw new Error(errorMessage(error))

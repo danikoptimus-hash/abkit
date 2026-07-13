@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Table, Button, Modal, Form, Input, Select, Switch, message, Typography, Space, Tag } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { apiClient, errorMessage } from '../api/client'
+import { queryKeys } from '../api/queryKeys'
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
 import type { components } from '../api/schema'
 
 type UserAdminOut = components['schemas']['UserAdminOut']
@@ -20,13 +22,18 @@ export function AdminPage() {
   const [modalUser, setModalUser] = useState<UserAdminOut | 'new' | null>(null)
   const [form] = Form.useForm<UserFormValues>()
   const [saving, setSaving] = useState(false)
+  // UX contract, part A: pristine snapshot captured at the same moment as
+  // the form's own setFieldsValue (openEdit/openCreate below) — compared
+  // against Form.useWatch's live values to know whether the modal has
+  // anything worth warning about on close.
+  const [pristine, setPristine] = useState<UserFormValues | null>(null)
   // Deactivated accounts (e.g. e2e/dev test users cleaned up per CLAUDE.md's
   // "_dev_ prefix + self-cleanup" rule) shouldn't clutter the list by
   // default — opt in with "Show inactive" instead.
   const [showInactive, setShowInactive] = useState(false)
 
   const { data: users, isLoading } = useQuery({
-    queryKey: ['admin-users'],
+    queryKey: queryKeys.adminUsers(),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/admin/users')
       if (error) throw new Error(errorMessage(error))
@@ -36,16 +43,20 @@ export function AdminPage() {
 
   const openEdit = (user: UserAdminOut) => {
     setModalUser(user)
-    form.setFieldsValue({
+    const values = {
       email: user.email, first_name: user.first_name, last_name: user.last_name,
       role: user.role, is_active: user.is_active,
-    })
+    }
+    form.setFieldsValue(values)
+    setPristine(values)
   }
 
   const openCreate = () => {
     setModalUser('new')
     form.resetFields()
-    form.setFieldsValue({ role: 'viewer', is_active: true })
+    const values = { email: '', first_name: '', last_name: '', role: 'viewer', is_active: true }
+    form.setFieldsValue(values)
+    setPristine(values)
   }
 
   const handleSave = async () => {
@@ -81,13 +92,34 @@ export function AdminPage() {
       }
       message.success('Saved')
       setModalUser(null)
-      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() })
+      // Audit gap fix (B.1): ExperimentPropertiesModal's owner/editor picker
+      // reads users-picker, a separate cached query from admin-users — a
+      // newly created/renamed/deactivated user must refresh both, or the
+      // Properties modal keeps offering a stale name/list.
+      queryClient.invalidateQueries({ queryKey: queryKeys.usersPicker() })
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Failed to save')
     } finally {
       setSaving(false)
     }
   }
+
+  const currentEmail = Form.useWatch('email', form)
+  const currentFirstName = Form.useWatch('first_name', form)
+  const currentLastName = Form.useWatch('last_name', form)
+  const currentRole = Form.useWatch('role', form)
+  const currentIsActive = Form.useWatch('is_active', form)
+  const isDirty =
+    modalUser !== null &&
+    !!pristine &&
+    (currentEmail !== pristine.email ||
+      currentFirstName !== pristine.first_name ||
+      currentLastName !== pristine.last_name ||
+      currentRole !== pristine.role ||
+      currentIsActive !== pristine.is_active)
+  const { guard } = useUnsavedGuard(isDirty)
+  const guardedCancel = () => guard(() => setModalUser(null))
 
   const handleResetPassword = async (user: UserAdminOut) => {
     const { data, error } = await apiClient.POST('/api/v1/admin/users/{user_id}/reset-password', {
@@ -156,7 +188,7 @@ export function AdminPage() {
       <Modal
         title={modalUser === 'new' ? 'New User' : `Edit ${(modalUser as UserAdminOut)?.email ?? ''}`}
         open={modalUser !== null}
-        onCancel={() => setModalUser(null)}
+        onCancel={guardedCancel}
         onOk={handleSave}
         confirmLoading={saving}
       >

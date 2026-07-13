@@ -2,6 +2,7 @@ import { Typography, Table, Tag, Space, Button, Alert, Descriptions, Collapse, S
 import { DownloadOutlined, EyeOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { RelativeTime } from '../../components/RelativeTime'
 import { getComputed } from './types'
 import type { ComputedDesignSummary } from './types'
@@ -149,7 +150,7 @@ function ConfigSummary({ config, computed }: { config: Record<string, unknown>; 
 // group's description (Stage 3) shown alongside its flow title for context.
 function VariantFlowsSection({ name, config }: { name: string; config: Record<string, unknown> }) {
   const { data: images } = useQuery({
-    queryKey: ['flow-images', name],
+    queryKey: queryKeys.flowImages(name),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/flow-images', {
         params: { path: { name } },
@@ -302,7 +303,7 @@ function mdeTable(computed: ComputedDesignSummary) {
 
 function DesignDataSection({ name }: { name: string }) {
   const { data: dataset, isFetching: datasetLoading } = useQuery({
-    queryKey: ['experiment-design-dataset', name],
+    queryKey: queryKeys.experimentDesignDataset(name),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/design-dataset', {
         params: { path: { name } },
@@ -313,7 +314,7 @@ function DesignDataSection({ name }: { name: string }) {
   })
 
   const { data: preview, isFetching: previewLoading } = useQuery({
-    queryKey: ['experiment-design-dataset-preview', dataset?.id],
+    queryKey: queryKeys.experimentDesignDatasetPreview(dataset?.id),
     enabled: !!dataset,
     queryFn: async () => {
       const { data } = await apiClient.GET('/api/v1/datasets/{dataset_id}/preview', {

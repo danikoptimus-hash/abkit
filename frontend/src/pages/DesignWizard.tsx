@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Steps, Button, Space, Input, Select, Alert, Spin, Tooltip, Typography } from 'antd'
 import { apiClient, errorMessage } from '../api/client'
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
 import { Step1Data } from './design-wizard/Step1Data'
 import { Step2GroupsMetrics } from './design-wizard/Step2GroupsMetrics'
 import { Step3Parameters } from './design-wizard/Step3Parameters'
@@ -154,6 +155,25 @@ export function DesignWizardPage() {
   const [state, setState] = useState<WizardState>(INITIAL_STATE)
   const { loading: redesignLoading, error: redesignError } = useRedesignPrefill(redesignName, setState)
 
+  // UX contract, part A: the wizard has no per-field pristine tracking of
+  // its own (unlike the Form-based modals) — the whole WizardState object
+  // is the form, so a plain snapshot comparison works. Baseline is
+  // INITIAL_STATE for a fresh design; for Redesign, it's captured once the
+  // async prefill (useRedesignPrefill above) has actually landed, not
+  // INITIAL_STATE (which would make an unmodified redesign look dirty). A
+  // plain useState (not a ref) here — its value feeds isDirty, which drives
+  // render output, and refs aren't meant to be read during render.
+  const [pristine, setPristine] = useState<WizardState>(INITIAL_STATE)
+  const capturedRef = useRef(false)
+  useEffect(() => {
+    if (redesignName && !redesignLoading && !capturedRef.current) {
+      setPristine(state)
+      capturedRef.current = true
+    }
+  }, [redesignLoading, redesignName, state])
+  const isDirty = JSON.stringify(state) !== JSON.stringify(pristine)
+  const { markSaved } = useUnsavedGuard(isDirty)
+
   const error = stepError(current, state)
 
   if (redesignLoading) return <Spin size="large" />
@@ -222,7 +242,7 @@ export function DesignWizardPage() {
         {current === 0 && <Step1Data state={state} setState={setState} lockSplitMode={!!redesignName} />}
         {current === 1 && <Step2GroupsMetrics state={state} setState={setState} />}
         {current === 2 && <Step3Parameters state={state} setState={setState} />}
-        {current === 3 && <Step4Review state={state} redesignName={redesignName} />}
+        {current === 3 && <Step4Review state={state} redesignName={redesignName} onSubmitted={markSaved} />}
       </div>
 
       {current < 3 && (

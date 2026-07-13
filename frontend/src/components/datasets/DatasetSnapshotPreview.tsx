@@ -1,6 +1,7 @@
 import { Typography, Table } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { RelativeTime } from '../RelativeTime'
 
 // Edit dataset modal (UX package, Datasets §2.1/§2.3) — the first 10 rows of
@@ -17,7 +18,7 @@ export function DatasetSnapshotPreview({
   fetchedAt: string | null
 }) {
   const { data: preview, isFetching } = useQuery({
-    queryKey: ['dataset-preview', datasetId],
+    queryKey: queryKeys.datasetPreview(datasetId),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/datasets/{dataset_id}/preview', {
         params: { path: { dataset_id: datasetId }, query: { rows: 10 } },

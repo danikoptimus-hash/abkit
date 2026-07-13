@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Typography, Radio, InputNumber, Select, Alert, Space } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { SIZE_MODE_LABELS, SPLIT_METHOD_LABELS, ISOLATION_LABELS, NAN_STRATEGY_LABELS } from './helpTexts'
 import type { WizardState } from './types'
 import { PRODUCT_NAME } from '../../branding'
@@ -48,7 +49,7 @@ export function Step3Parameters({ state, setState }: Props) {
   }, [state.sizeMode, state.mdeAbsMetricId, state.datasetId])
 
   const { data: activeExperiments } = useQuery({
-    queryKey: ['active-experiments-for-isolation'],
+    queryKey: queryKeys.activeExperimentsForIsolation(),
     enabled: state.isolation === 'exclude_selected',
     queryFn: async () => {
       const [designed, running] = await Promise.all([

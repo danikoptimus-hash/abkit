@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Typography, Table } from 'antd'
 import { apiClient, errorMessage } from '../../api/client'
+import { queryKeys } from '../../api/queryKeys'
 import { RelativeTime } from '../../components/RelativeTime'
 
 export function HistorySection({ name }: { name: string }) {
@@ -9,7 +10,7 @@ export function HistorySection({ name }: { name: string }) {
   const pageSize = 50
 
   const { data, isLoading } = useQuery({
-    queryKey: ['experiment-audit', name, page],
+    queryKey: queryKeys.experimentAudit(name, page),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments/{name}/audit', {
         params: { path: { name }, query: { page, page_size: pageSize } },
