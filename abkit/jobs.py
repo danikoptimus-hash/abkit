@@ -841,6 +841,87 @@ def run_delete_tag(current_user: CurrentUser, tag_id: str) -> int:
     return affected
 
 
+class TagNameConflictError(Exception):
+    """Raised by run_rename_tag when the requested new name collides
+    (case-insensitively — Tag.name is CITEXT) with a DIFFERENT existing tag.
+    Renaming doesn't silently fail or auto-merge on this — it surfaces the
+    existing tag's id/name so the frontend can offer Merge as an explicit
+    follow-up (tag management page, /settings/tags §2.1)."""
+
+    def __init__(self, existing_tag_id: str, existing_tag_name: str) -> None:
+        self.existing_tag_id = existing_tag_id
+        self.existing_tag_name = existing_tag_name
+        super().__init__(f"A tag named '{existing_tag_name}' already exists")
+
+
+def list_tags_admin(current_user: CurrentUser, q: str | None) -> Any:
+    """GET /tags/admin — Admin-only (tag management page). Unlike
+    search_tags (typeahead, viewer+, name only — used by the Properties
+    modal and the experiments list's tag filter), this returns every tag's
+    usage count and creator, which only an admin needs to see in order to
+    decide what to rename/merge/delete."""
+    require_role(current_user, "admin")
+    from abkit.db.repositories import TagRepo
+
+    return TagRepo().list_all_with_counts(q)
+
+
+def run_rename_tag(current_user: CurrentUser, tag_id: str, new_name: str) -> Any:
+    """PATCH /tags/{id} — Admin-only (tag management page §2.1)."""
+    require_role(current_user, "admin")
+    from abkit import storage
+    from abkit.db.repositories import TagRepo
+
+    new_name = new_name.strip()
+    if not new_name:
+        raise storage.StorageError("Tag name cannot be empty")
+
+    parsed_id = uuid_mod.UUID(tag_id)
+    tag = TagRepo().get_by_id(parsed_id)
+    if tag is None:
+        raise storage.StorageError(f"Tag '{tag_id}' not found")
+
+    existing = TagRepo().find_by_name(new_name)
+    if existing is not None and existing.id != parsed_id:
+        raise TagNameConflictError(str(existing.id), existing.name)
+
+    old_name = tag.name
+    renamed = TagRepo().rename(parsed_id, new_name)
+    _audit(
+        current_user, "tag.rename", object_type="tag", object_id=tag_id, object_name=renamed.name,
+        details={"old_name": old_name, "new_name": renamed.name},
+    )
+    return renamed
+
+
+def run_merge_tag(current_user: CurrentUser, tag_id: str, target_id: str) -> int:
+    """POST /tags/{id}/merge — Admin-only (tag management page §2.3).
+    Reassigns every experiment carrying `tag_id` onto `target_id` and
+    deletes `tag_id` (TagRepo.merge does both in one transaction). Returns
+    how many experiments were affected, for the frontend's confirmation
+    message."""
+    require_role(current_user, "admin")
+    from abkit import storage
+    from abkit.db.repositories import TagRepo
+
+    parsed_source = uuid_mod.UUID(tag_id)
+    parsed_target = uuid_mod.UUID(target_id)
+    if parsed_source == parsed_target:
+        raise storage.StorageError("Cannot merge a tag into itself")
+
+    source = TagRepo().get_by_id(parsed_source)
+    target = TagRepo().get_by_id(parsed_target)
+    if source is None or target is None:
+        raise storage.StorageError("Tag not found")
+
+    affected = TagRepo().merge(parsed_source, parsed_target)
+    _audit(
+        current_user, "tag.merge", object_type="tag", object_id=str(target.id), object_name=target.name,
+        details={"source_tag": source.name, "target_tag": target.name, "affected_experiments": affected},
+    )
+    return affected
+
+
 def run_upload_flow_image(
     current_user: CurrentUser, name: str, group_name: str, flow_title: str, raw: bytes
 ) -> Any:

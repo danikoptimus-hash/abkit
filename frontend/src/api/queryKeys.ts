@@ -20,6 +20,8 @@ export const queryKeys = {
   // invalidates every tagsTypeahead(...) entry regardless of what the user
   // had typed into the search box, in one call.
   tagsTypeaheadAll: () => ['tags-typeahead'] as const,
+  adminTags: (q: string) => ['admin-tags', q] as const,
+  adminTagsAll: () => ['admin-tags'] as const,
 
   // Datasets
   datasets: (page: number, q: string, source: string | undefined) => ['datasets', page, q, source] as const,

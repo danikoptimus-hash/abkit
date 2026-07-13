@@ -11,6 +11,7 @@ import { AdminPage } from './pages/Admin'
 import { AuditPage } from './pages/Audit'
 import { ProfilePage } from './pages/Profile'
 import { DatabaseConnectionsPage } from './pages/admin/DatabaseConnections'
+import { TagsAdminPage } from './pages/admin/Tags'
 
 // UX contract (unsaved-changes guard, part A): createRoutesFromElements lets
 // this stay ordinary JSX <Route> elements (same as the <Routes> tree this
@@ -84,6 +85,14 @@ export const routes = createRoutesFromElements(
         element={
           <RequireAuth minRole="admin">
             <DatabaseConnectionsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings/tags"
+        element={
+          <RequireAuth minRole="admin">
+            <TagsAdminPage />
           </RequireAuth>
         }
       />

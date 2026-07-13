@@ -172,3 +172,130 @@ def test_delete_tag_requires_admin_and_detaches_from_experiments(app_client):
 
     audit = AuditRepo().list_recent(limit=10, object_name="to-delete")
     assert any(a.action == "tag.delete" for a in audit)
+
+
+def test_list_tags_admin_requires_admin_and_shows_count_and_creator(app_client):
+    owner_id = _login(app_client, "tags_admin_owner@co.com")
+    _make_experiment("tags_admin_exp1", owner_id)
+    _make_experiment("tags_admin_exp2", owner_id)
+    tag = app_client.post("/api/v1/tags", json={"name": "admin-list-tag"}).json()
+    app_client.put("/api/v1/experiments/tags_admin_exp1/tags", json={"tag_ids": [tag["id"]]})
+    app_client.put("/api/v1/experiments/tags_admin_exp2/tags", json={"tag_ids": [tag["id"]]})
+
+    forbidden = app_client.get("/api/v1/tags/admin")
+    assert forbidden.status_code == 403
+
+    _login(app_client, "tags_admin_viewer@co.com", role="admin")
+    resp = app_client.get("/api/v1/tags/admin")
+    assert resp.status_code == 200, resp.text
+    row = next(t for t in resp.json()["items"] if t["name"] == "admin-list-tag")
+    assert row["experiment_count"] == 2
+    assert row["created_by_email"] == "tags_admin_owner@co.com"
+    assert row["created_at"]
+
+
+def test_list_tags_admin_search_and_zero_count_tags_included(app_client):
+    _login(app_client, "tags_admin_zero_owner@co.com", role="admin")
+    app_client.post("/api/v1/tags", json={"name": "zero-usage-tag"})
+
+    resp = app_client.get("/api/v1/tags/admin", params={"q": "zero-usage"})
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["experiment_count"] == 0
+
+
+def test_rename_tag_requires_admin_and_conflict_offers_merge(app_client):
+    _login(app_client, "tags_rename_owner@co.com")
+    tag_a = app_client.post("/api/v1/tags", json={"name": "rename-a"}).json()
+    tag_b = app_client.post("/api/v1/tags", json={"name": "rename-b"}).json()
+
+    forbidden = app_client.patch(f"/api/v1/tags/{tag_a['id']}", json={"name": "renamed-a"})
+    assert forbidden.status_code == 403
+
+    _login(app_client, "tags_rename_admin@co.com", role="admin")
+    ok = app_client.patch(f"/api/v1/tags/{tag_a['id']}", json={"name": "renamed-a"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["name"] == "renamed-a"
+
+    # Case-insensitive collision with a DIFFERENT tag -> 409 with the
+    # existing tag's id/name so the frontend can offer Merge instead.
+    conflict = app_client.patch(f"/api/v1/tags/{tag_a['id']}", json={"name": "RENAME-B"})
+    assert conflict.status_code == 409, conflict.text
+    body = conflict.json()["error"]
+    assert body["code"] == "tag_name_conflict"
+    assert body["details"]["existing_tag_id"] == tag_b["id"]
+    assert body["details"]["existing_tag_name"] == "rename-b"
+
+    audit = AuditRepo().list_recent(limit=10, object_name="renamed-a")
+    assert any(a.action == "tag.rename" for a in audit)
+
+
+def test_merge_tag_reassigns_experiments_and_deletes_source(app_client):
+    owner_id = _login(app_client, "tags_merge_owner@co.com")
+    _make_experiment("tags_merge_exp1", owner_id)
+    _make_experiment("tags_merge_exp2", owner_id)
+    source = app_client.post("/api/v1/tags", json={"name": "chekout"}).json()
+    target = app_client.post("/api/v1/tags", json={"name": "checkout"}).json()
+    # exp1 carries only source; exp2 carries BOTH — the merge must drop the
+    # would-be-duplicate link on exp2 rather than erroring on the composite PK.
+    app_client.put("/api/v1/experiments/tags_merge_exp1/tags", json={"tag_ids": [source["id"]]})
+    app_client.put(
+        "/api/v1/experiments/tags_merge_exp2/tags", json={"tag_ids": [source["id"], target["id"]]},
+    )
+
+    forbidden = app_client.post(f"/api/v1/tags/{source['id']}/merge", json={"target_id": target["id"]})
+    assert forbidden.status_code == 403
+
+    _login(app_client, "tags_merge_admin@co.com", role="admin")
+    resp = app_client.post(f"/api/v1/tags/{source['id']}/merge", json={"target_id": target["id"]})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["affected_experiments"] == 2
+
+    detail1 = app_client.get("/api/v1/experiments/tags_merge_exp1").json()
+    assert [t["name"] for t in detail1["tags"]] == ["checkout"]
+    detail2 = app_client.get("/api/v1/experiments/tags_merge_exp2").json()
+    assert [t["name"] for t in detail2["tags"]] == ["checkout"]
+
+    search_resp = app_client.get("/api/v1/tags", params={"q": "chekout"})
+    assert search_resp.json()["items"] == []
+
+    audit = AuditRepo().list_recent(limit=10, object_name="checkout")
+    assert any(a.action == "tag.merge" for a in audit)
+
+
+def test_merge_tag_into_itself_is_rejected(app_client):
+    _login(app_client, "tags_merge_self@co.com", role="admin")
+    tag = app_client.post("/api/v1/tags", json={"name": "self-merge"}).json()
+
+    resp = app_client.post(f"/api/v1/tags/{tag['id']}/merge", json={"target_id": tag["id"]})
+    assert resp.status_code == 404
+
+
+def test_bulk_delete_tags_requires_typed_delete_and_admin(app_client):
+    _login(app_client, "tags_bulk_owner@co.com")
+    tag_a = app_client.post("/api/v1/tags", json={"name": "bulk-a"}).json()
+    tag_b = app_client.post("/api/v1/tags", json={"name": "bulk-b"}).json()
+
+    forbidden = app_client.post(
+        "/api/v1/tags/bulk-delete", json={"tag_ids": [tag_a["id"], tag_b["id"]], "confirm": "DELETE"},
+    )
+    assert forbidden.status_code == 403
+
+    _login(app_client, "tags_bulk_admin@co.com", role="admin")
+    unconfirmed = app_client.post(
+        "/api/v1/tags/bulk-delete", json={"tag_ids": [tag_a["id"]], "confirm": ""},
+    )
+    assert unconfirmed.status_code == 400
+
+    resp = app_client.post(
+        "/api/v1/tags/bulk-delete",
+        json={"tag_ids": [tag_a["id"], tag_b["id"], "00000000-0000-0000-0000-000000000000"], "confirm": "DELETE"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert sorted(body["deleted"]) == sorted([tag_a["id"], tag_b["id"]])
+    assert len(body["skipped"]) == 1
+    assert body["skipped"][0]["reason"] == "not found"
+
+    remaining = app_client.get("/api/v1/tags", params={"q": "bulk-"}).json()["items"]
+    assert remaining == []

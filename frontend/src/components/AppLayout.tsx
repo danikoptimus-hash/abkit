@@ -55,6 +55,7 @@ export function AppLayout() {
           { type: 'divider' as const },
           { key: 'data-label', label: 'Data', type: 'group' as const },
           { key: 'db-connections', label: <Link to="/admin/db-connections">Database Connections</Link> },
+          { key: 'tags', label: <Link to="/settings/tags">Tags</Link> },
           { type: 'divider' as const },
         ]
       : []),

@@ -80,6 +80,22 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
+    from abkit.jobs import TagNameConflictError
+
+    @app.exception_handler(TagNameConflictError)
+    async def _handle_tag_name_conflict_error(request: Request, exc: TagNameConflictError) -> JSONResponse:
+        # PATCH /tags/{id} renaming into a name that collides
+        # case-insensitively with a DIFFERENT existing tag (tag management
+        # page §2.1) — the frontend uses existing_tag_id/name to offer
+        # Merge instead of just showing a generic error.
+        return JSONResponse(
+            status_code=409,
+            content=_error_body(
+                "tag_name_conflict", str(exc),
+                {"existing_tag_id": exc.existing_tag_id, "existing_tag_name": exc.existing_tag_name},
+            ),
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(

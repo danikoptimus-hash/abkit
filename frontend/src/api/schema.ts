@@ -1132,6 +1132,80 @@ export interface paths {
         delete: operations["delete_tag_api_v1_tags__tag_id__delete"];
         options?: never;
         head?: never;
+        /**
+         * Rename Tag
+         * @description Admin-only (enforced in abkit/jobs.py::run_rename_tag). A name
+         *     colliding case-insensitively with a DIFFERENT existing tag raises
+         *     TagNameConflictError (409, backend/errors.py) instead of failing
+         *     generically — the frontend uses that to offer Merge.
+         */
+        patch: operations["rename_tag_api_v1_tags__tag_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/tags/admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tags Admin
+         * @description Tag management page (/settings/tags, admin-only) — every tag plus its
+         *     usage count and creator, which the plain typeahead (GET /tags) never
+         *     exposes.
+         */
+        get: operations["list_tags_admin_api_v1_tags_admin_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tags/{tag_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge Tag
+         * @description Admin-only (enforced in abkit/jobs.py::run_merge_tag) — reassigns
+         *     every experiment carrying `tag_id` onto `body.target_id` and deletes
+         *     `tag_id`, transactionally.
+         */
+        post: operations["merge_tag_api_v1_tags__tag_id__merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tags/bulk-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Tags
+         * @description Bulk select + Delete on the tag management page (§2.4) — mirrors
+         *     /datasets/bulk-delete's shape, but unlike datasets there's no per-item
+         *     permission variance (tag delete is admin-only, full stop, enforced
+         *     identically for every id) — only "not found" can cause a per-item skip.
+         */
+        post: operations["bulk_delete_tags_api_v1_tags_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -1362,6 +1436,31 @@ export interface components {
         BulkDeleteSkipped: {
             /** Name */
             name: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * BulkDeleteTagsRequest
+         * @description Mirrors BulkDeleteDatasetsRequest — one typed-DELETE confirmation for
+         *     the whole batch (tag management page §2.4).
+         */
+        BulkDeleteTagsRequest: {
+            /** Tag Ids */
+            tag_ids: string[];
+            /** Confirm */
+            confirm: string;
+        };
+        /** BulkDeleteTagsResult */
+        BulkDeleteTagsResult: {
+            /** Deleted */
+            deleted: string[];
+            /** Skipped */
+            skipped: components["schemas"]["BulkDeleteTagsSkipped"][];
+        };
+        /** BulkDeleteTagsSkipped */
+        BulkDeleteTagsSkipped: {
+            /** Tag Id */
+            tag_id: string;
             /** Reason */
             reason: string;
         };
@@ -1930,6 +2029,16 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** MergeTagRequest */
+        MergeTagRequest: {
+            /** Target Id */
+            target_id: string;
+        };
+        /** MergeTagResponse */
+        MergeTagResponse: {
+            /** Affected Experiments */
+            affected_experiments: number;
+        };
         /**
          * MetricBaselineRequest
          * @description Форма метрики (как MetricConfig) для расчета baseline-среднего —
@@ -2095,6 +2204,11 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** RenameTagRequest */
+        RenameTagRequest: {
+            /** Name */
+            name: string;
+        };
         /** ResetPasswordResponse */
         ResetPasswordResponse: {
             /** New Password */
@@ -2159,6 +2273,25 @@ export interface components {
             /** Tables */
             tables: string[];
         };
+        /**
+         * TagAdminOut
+         * @description GET /tags/admin row (tag management page, admin-only) — TagOut plus
+         *     the fields only an admin needs to decide what to rename/merge/delete.
+         */
+        TagAdminOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Color */
+            color?: string | null;
+            /** Experiment Count */
+            experiment_count: number;
+            /** Created By Email */
+            created_by_email?: string | null;
+            /** Created At */
+            created_at: string;
+        };
         /** TagOut */
         TagOut: {
             /** Id */
@@ -2172,6 +2305,11 @@ export interface components {
         TagUsageResponse: {
             /** Count */
             count: number;
+        };
+        /** TagsAdminResponse */
+        TagsAdminResponse: {
+            /** Items */
+            items: components["schemas"]["TagAdminOut"][];
         };
         /** TagsResponse */
         TagsResponse: {
@@ -4628,6 +4766,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteTagResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_tag_api_v1_tags__tag_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTagRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tags_admin_api_v1_tags_admin_get: {
+        parameters: {
+            query?: {
+                /** @description Live search by name */
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagsAdminResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merge_tag_api_v1_tags__tag_id__merge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeTagRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeTagResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_tags_api_v1_tags_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteTagsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteTagsResult"];
                 };
             };
             /** @description Validation Error */

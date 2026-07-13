@@ -109,7 +109,9 @@ product, team, feature, or whatever grouping makes sense to your
 organization (the same idea as tags on a Superset dashboard). Add them from
 the **Edit Properties** modal's Tags field: pick an existing tag from the
 typeahead, or type a new name and press Enter to create it on the spot — no
-separate "manage tags" screen needed for day-to-day use. Each tag gets a
+trip to a separate screen needed for day-to-day use. Typing a name that
+already exists (even in a different case, like "checkout" vs "Checkout")
+reuses that tag instead of creating a near-duplicate. Each tag gets a
 consistent color derived from its name, so the same tag always looks the
 same wherever it shows up.
 
@@ -122,9 +124,14 @@ narrow to experiments that have *all* of them, not just any), and the search
 box matches tag names as well as experiment names, so typing a tag finds
 every experiment tagged with it without opening the filter at all.
 
-Only an Admin can delete a tag outright (removing it from every experiment
-that had it) — anyone with edit access to a given experiment can add or
-remove tags on that one experiment through its own Properties modal.
+Anyone with edit access to a given experiment can add or remove tags on that
+one experiment through its own Properties modal. Cleaning up the tag list
+itself — renaming a tag, merging two tags that turned out to mean the same
+thing (e.g. a typo like "chekout" into "checkout"), or deleting one outright
+— is an Admin-only job, done from **Settings → Data → Tags**: a table of
+every tag with its experiment count, creator, and hover actions to rename,
+merge, or delete (individually or in bulk). Renaming into a name that
+collides with an existing tag offers to merge into it instead of failing.
 
 ### Roles
 

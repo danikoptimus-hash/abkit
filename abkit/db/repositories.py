@@ -1141,6 +1141,86 @@ class TagRepo:
                 raise RepoError(f"Tag {tag_id} not found")
             s.delete(tag)
 
+    def find_by_name(self, name: str) -> Tag | None:
+        """Exact match, case-insensitive (CITEXT) — used by run_rename_tag to
+        detect a collision with a DIFFERENT existing tag before renaming."""
+        with session_scope() as s:
+            tag = s.scalar(select(Tag).where(Tag.name == name))
+            if tag is not None:
+                s.expunge(tag)
+            return tag
+
+    def rename(self, tag_id: uuid_mod.UUID, new_name: str) -> Tag:
+        """Plain rename — the caller (run_rename_tag) is responsible for
+        checking find_by_name() first and raising TagNameConflictError, so
+        this never has to catch a unique-violation from the CITEXT column."""
+        with session_scope() as s:
+            tag = s.get(Tag, tag_id)
+            if tag is None:
+                raise RepoError(f"Tag {tag_id} not found")
+            tag.name = new_name
+            s.flush()
+            s.refresh(tag)
+            s.expunge(tag)
+            return tag
+
+    def merge(self, source_id: uuid_mod.UUID, target_id: uuid_mod.UUID) -> int:
+        """Tag management page (/settings/tags) — reassigns every
+        experiment_tags row from `source_id` to `target_id`, then deletes
+        `source_id`, all in one transaction (single session_scope commit),
+        so a crash mid-way can't leave some experiments re-tagged and others
+        still pointing at a tag that's about to disappear. An experiment
+        already carrying BOTH tags would violate the (experiment_id, tag_id)
+        composite PK if the link were simply repointed — those rows are
+        dropped instead of repointed, since the experiment already has the
+        target tag and doesn't need a duplicate. Returns how many
+        experiments carried `source_id` (for the frontend's confirmation
+        message), regardless of whether the link was repointed or dropped
+        as a duplicate."""
+        with session_scope() as s:
+            source = s.get(Tag, source_id)
+            target = s.get(Tag, target_id)
+            if source is None or target is None:
+                raise RepoError("Tag not found")
+            target_experiment_ids = set(
+                s.scalars(select(ExperimentTag.experiment_id).where(ExperimentTag.tag_id == target_id))
+            )
+            source_links = list(
+                s.scalars(select(ExperimentTag).where(ExperimentTag.tag_id == source_id))
+            )
+            affected = 0
+            for link in source_links:
+                affected += 1
+                if link.experiment_id in target_experiment_ids:
+                    s.delete(link)
+                else:
+                    link.tag_id = target_id
+            s.delete(source)
+            return affected
+
+    def list_all_with_counts(self, q: str | None = None) -> list[tuple[Tag, int]]:
+        """Tag management page (/settings/tags, admin-only) — every tag plus
+        how many experiments currently carry it, one query (not N+1 via
+        count_for_tag per row). Default order is by count descending (item
+        1's "мусор с count=0 всплывает внизу"); the frontend re-sorts other
+        columns client-side since the full list is already in memory."""
+        with session_scope() as s:
+            count_col = func.count(ExperimentTag.experiment_id)
+            stmt = (
+                select(Tag, count_col)
+                .outerjoin(ExperimentTag, ExperimentTag.tag_id == Tag.id)
+                .group_by(Tag.id)
+                .order_by(count_col.desc(), Tag.name)
+            )
+            if q:
+                stmt = stmt.where(Tag.name.like(f"%{q}%"))
+            rows = s.execute(stmt).all()
+            result = []
+            for tag, count in rows:
+                s.expunge(tag)
+                result.append((tag, count))
+            return result
+
 
 class ExperimentTagRepo:
     def set_for_experiment(self, experiment_id: uuid_mod.UUID, tag_ids: list[uuid_mod.UUID]) -> None:
