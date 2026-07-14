@@ -142,6 +142,13 @@ class AnalyzeRequest(BaseModel):
     # for the normal split_source="abkit" flow.
     group_column: str | None = None
     group_mapping: dict[str, str] | None = None
+    # Item 2 (explicit method selection): metric name -> method id (e.g.
+    # "cuped_welch", "mann_whitney" — see abkit/experiment.py::
+    # steps_for_method_id and its frontend mirror,
+    # frontend/src/pages/experiment/methodOptions.ts). A metric absent from
+    # this dict keeps the type/config-based default (resolve_steps'
+    # fallback chain) — this is an override, not a required full mapping.
+    methods: dict[str, str] | None = None
 
 
 class AnalyzeDemoRequest(BaseModel):

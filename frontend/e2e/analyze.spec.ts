@@ -364,3 +364,57 @@ test('hovering the forest plot and the ECDF shows a tooltip with numbers', async
   })
   await expect(page.getByText(/cumulative=\d/)).toBeVisible()
 })
+
+// Item 2 (explicit method selection), item 2.6: the per-metric method
+// selector on the Analysis tab is type-aware (no Z-test of proportions for a
+// continuous metric) and pre_col-aware (no CUPED option without a pre-period
+// column — seedExperiment's revenue metric has none). Picking a non-default
+// method (Mann-Whitney) becomes the designed method: the Results row is
+// bolded (rowClassName, tested generically elsewhere) and carries an explicit
+// "manually selected" tag.
+test('Analysis method selector hides inapplicable methods and manually picking one is reflected in Results', async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(60_000)
+  const name = `analyze_method_select_e2e_${Date.now()}`
+  await seedExperiment(request, name)
+  await loginViaUi(page)
+
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Analysis' }).click()
+
+  const methodSelect = page.getByRole('combobox', { name: 'method-select-revenue' })
+  await expect(methodSelect).toBeVisible()
+  await methodSelect.click()
+  // AntD Select keeps a hidden a11y-only role="option" node around even when
+  // closed (mirroring the current selection) — page.getByRole('option')
+  // matches that too, so scope to the actual dropdown list's option content
+  // (same convention other e2e specs use for AntD Select: getByTitle on the
+  // option, since each option row carries a title attribute with its label).
+  const optionsLocator = page.locator('.ant-select-item-option-content')
+  await expect(optionsLocator.first()).toBeVisible()
+
+  const optionTexts = await optionsLocator.allTextContents()
+  expect(optionTexts.some((t) => /Z-test/.test(t))).toBe(false)
+  expect(optionTexts.some((t) => /CUPED/.test(t))).toBe(false)
+  expect(optionTexts.some((t) => /Mann-Whitney/.test(t))).toBe(true)
+  expect(optionTexts.some((t) => /Welch t-test.*recommended/.test(t))).toBe(true)
+
+  await page.getByTitle('Mann-Whitney (Hodges-Lehmann)').click()
+  await expect(
+    page.getByText(/differs from the designed method — power was calculated for Welch t-test/),
+  ).toBeVisible()
+
+  await page.getByRole('button', { name: /Generate demo post-period data/ }).click()
+  await expect(page.getByText(/Demo data generated:/)).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Run analysis' }).click()
+  await expect(
+    page.getByText(/significant positive|significant negative|no effect detected/).first(),
+  ).toBeVisible({ timeout: 20_000 })
+
+  await page.getByRole('tab', { name: 'Results' }).click()
+  const designedRow = page.locator('tr.detailed-results-designed-row').filter({ hasText: 'revenue' })
+  await expect(designedRow.getByText('Mann-Whitney (Hodges-Lehmann)')).toBeVisible()
+  await expect(designedRow.getByText('manually selected')).toBeVisible()
+})

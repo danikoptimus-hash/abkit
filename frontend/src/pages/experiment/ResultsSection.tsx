@@ -9,6 +9,7 @@ import type { BlockDraft } from './MarkdownBlockView'
 import { experimentResultsQueryKey, fetchExperimentResults } from './resultsQuery'
 import { LifecycleDates } from '../../components/LifecycleDates'
 import { RelativeTime } from '../../components/RelativeTime'
+import type { AnalyzeMetric } from './types'
 
 interface Props {
   experimentName: string
@@ -25,10 +26,16 @@ interface Props {
   // Verdict column/cards here the same way it drives Design/Analysis/the
   // HTML report — see DetailedResultsTable's alpha prop.
   alpha: number
+  // Item 2: type/pre-col per metric — DetailedResultsTable uses this to
+  // derive "designed vs manually selected" (no reload/session state
+  // needed — reconstructed purely from the metric config + the result's
+  // own method string, so it works identically right after a run and on a
+  // cold Results-tab page load).
+  metrics: AnalyzeMetric[]
 }
 
 export function ResultsSection({
-  experimentName, familySize, createdAt, startedAt, completedAt, blocks, editing, onChangeBlock, onAddBlock, onRemoveBlock, alpha,
+  experimentName, familySize, createdAt, startedAt, completedAt, blocks, editing, onChangeBlock, onAddBlock, onRemoveBlock, alpha, metrics,
 }: Props) {
   // Same query key as AnalyzeSection (Analysis tab) — shares the react-query
   // cache entry, so opening the Results tab directly (deep link/reload)
@@ -63,6 +70,7 @@ export function ResultsSection({
             experimentName={experimentName}
             showCorrection={familySize > 1}
             alpha={alpha}
+            metrics={metrics}
           />
           <HelpCollapse chartType="verdicts_table" table />
 

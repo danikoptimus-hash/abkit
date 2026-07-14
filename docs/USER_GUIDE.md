@@ -335,8 +335,24 @@ Once you have post-period data, open the experiment's **Analyze** tab:
    becomes **required** — you'll see how many users have multiple rows, and
    **Run analysis** stays disabled until you pick the column, since there's
    no way to know how to aggregate each user's rows into one otherwise.
-3. Open **Advanced options** if you need to change anything — it's collapsed
-   by default so most runs don't need to touch it:
+3. **Analysis method** — one row per metric, always visible (not tucked
+   inside Advanced options), showing exactly which statistical method will
+   decide that metric's verdict. It's pre-filled with the recommended method
+   from your design (Welch t-test for continuous, Z-test of proportions for
+   binary, CUPED+Welch/CUPED-adjusted when a pre-period column is set) —
+   marked "(recommended)" in the dropdown. The dropdown only offers methods
+   that make sense for that metric's type: continuous metrics never see
+   Z-test of proportions, and CUPED is only offered when the metric actually
+   has a pre-period column. If you pick anything other than the recommended
+   method, a banner explains what changed ("differs from the designed
+   method — power was calculated for Welch t-test") — this is informational,
+   not a block; the run proceeds with whatever you picked. Results reflect
+   this too: a manually-picked method's row in the Detailed results table
+   carries a **manually selected** tag next to the method name, so it's
+   obvious later (even after reloading the page) that the verdict didn't
+   come from the as-designed method.
+4. Open **Advanced options** if you need to change anything else — it's
+   collapsed by default so most runs don't need to touch it:
    - **Multiple testing correction** — `holm` (default), `bonferroni`,
      `fdr_bh` (Benjamini-Hochberg), or none. This only appears when your
      design actually tests more than one hypothesis (more than one primary
@@ -361,7 +377,7 @@ Once you have post-period data, open the experiment's **Analyze** tab:
      
      Uncheck it for faster runs on large datasets or weak machines —
      Bootstrap in particular (10k iterations) is the heaviest of the bunch.
-4. **Run analysis**. This is an explicit step — preparing/uploading data does
+5. **Run analysis**. This is an explicit step — preparing/uploading data does
    not run it automatically, so you control exactly when the (final,
    decision-driving) analysis happens.
 
@@ -392,6 +408,14 @@ The **Results** tab has, per metric:
     hypothesis (one primary metric, one treatment group), adjustment is a
     no-op, so this column (and **Correction**) is left out of the table
     entirely instead of showing a value identical to the raw p-value.
+  - **Variance reduction** — how much lower that row's effect estimate
+    variance is versus the raw data, labeled by technique: **CUPED (14.2%)**,
+    **Outlier removal (37%)** (RemoveOutliers+Welch — hover the cell for how
+    many observations were trimmed, per group), or **PostStrat (20%)**
+    (post-stratification, if your config uses it). A dash (—) with a "no
+    variance reduction technique applied" tooltip means the row's method
+    (plain Welch, Z-test, Mann-Whitney, bootstrap) doesn't reduce variance at
+    all — that's expected, not a missing value.
   - **CUPED ρ** — correlation between the metric and its pre-period
     covariate, shown only on CUPED rows; variance reduction is roughly ρ².
     Low ρ means CUPED isn't helping much for that metric.
@@ -568,9 +592,16 @@ running one.
   between tests.
 - **Verdict** — the app's automated read of a primary metric's designed-method
   result: significant positive/negative, no effect detected, or failed.
-- **Designed method** — the specific statistical method declared during
-  Design as the one the decision will be based on; other methods computed via
-  "Compare alternative methods" are for robustness-checking only.
+- **Designed method** — the statistical method that decides a metric's
+  verdict for a given run: the recommended default from Design, unless you
+  picked a different one in the Analysis method selector for that run (then
+  it's flagged "manually selected" instead). Other methods computed via
+  "Compare alternative methods" are for robustness-checking only, regardless
+  of which method is designed.
+- **Variance reduction** — how much lower a method's effect-estimate variance
+  is versus the raw data; only CUPED, outlier removal, and
+  post-stratification have a mechanic for this (see the Detailed results
+  table's Variance reduction column in step 4).
 - **A/A test** — a simulated or real comparison between two groups that
   should have no difference, used to check the methodology (and, for a real
   A/A on live traffic, the instrumentation) is honest.

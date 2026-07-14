@@ -12,7 +12,6 @@ from typing import Any
 
 import jinja2
 import pandas as pd
-import yaml
 from markupsafe import Markup
 from PIL import Image
 
@@ -165,6 +164,11 @@ DETAILED_COLUMN_TOOLTIPS: dict[str, str] = {
     "CUPED rho": (
         "Correlation between metric and its pre-period covariate; variance reduction ≈ rho²"
     ),
+    "Variance reduction": (
+        "How much lower the effect estimate's variance is versus the raw (untreated) data — "
+        "from CUPED, outlier removal, or post-stratification. Blank (—) when the method uses "
+        "none of these techniques."
+    ),
 }
 
 
@@ -282,11 +286,8 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
         detailed_rows=detailed_rows,
         detailed_designed_flags=detailed_designed_flags,
         detailed_column_tooltips=DETAILED_COLUMN_TOOLTIPS,
-        abkit_version=abkit_version,
         product_name=PRODUCT_NAME,
         logo_data_uri=_logo_data_uri(),
-        seed=config.seed,
-        config_yaml=yaml.safe_dump(config.model_dump(mode="json"), allow_unicode=True, sort_keys=False),
     )
 
 

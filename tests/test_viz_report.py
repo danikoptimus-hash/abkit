@@ -17,7 +17,6 @@ _REPORT_SECTION_IDS = [
     "section-segments",
     "section-cumulative",
     "section-diagnostics",
-    "section-appendix",
 ]
 
 _DESIGN_REPORT_SECTION_IDS = [
@@ -230,6 +229,10 @@ def test_analysis_report_has_all_sections_and_writes_results_json(tmp_path):
     html = report_path.read_text(encoding="utf-8")
     for section_id in _REPORT_SECTION_IDS:
         assert f'id="{section_id}"' in html, f"Секция {section_id} отсутствует в report.html"
+    # Item 1: Appendix (config_yaml dump + version/seed) removed from the
+    # analysis report — the same details are already reachable in the UI.
+    assert 'id="section-appendix"' not in html
+    assert "Appendix" not in html
 
     results_json_path = experiment.path / "results.json"
     assert results_json_path.exists()

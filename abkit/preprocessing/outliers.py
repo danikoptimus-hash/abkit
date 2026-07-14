@@ -24,6 +24,12 @@ class RemoveOutliers(Step):
 
     def apply(self, ctx: MetricContext) -> MetricContext:
         combined = ctx.values.dropna()
+        # Item 3.2 (variance reduction column): variance of the combined
+        # (control+treatment) values before trimming, on the same basis
+        # CUPED computes its own reduction from (abkit/analysis/
+        # variance_reduction.py::CUPED.apply) — so the two are comparable in
+        # the same "Variance reduction" table column.
+        var_before = float(combined.var(ddof=1)) if len(combined) > 1 else None
         lo = combined.quantile(self.lower_q) if self.lower_q > 0 else -np.inf
         hi = combined.quantile(self.upper_q) if self.upper_q < 1 else np.inf
 
@@ -40,6 +46,10 @@ class RemoveOutliers(Step):
             ctx.covariate = ctx.covariate[keep_mask]
         if ctx.stratum is not None:
             ctx.stratum = ctx.stratum[keep_mask]
+
+        if var_before is not None and var_before > 0:
+            var_after = float(ctx.values.dropna().var(ddof=1))
+            ctx.variance_reduction = 1 - var_after / var_before
         return ctx
 
 

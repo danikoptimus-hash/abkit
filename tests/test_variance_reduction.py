@@ -158,6 +158,28 @@ def test_post_stratification_skips_small_strata_and_warns():
     assert any("skipped" in w for w in result_ctx.warnings)
 
 
+# Item 3.3/3.6: strata with very different baseline levels (but no
+# within-stratum effect) inflate the naive, unstratified variance of the
+# group-difference estimate — post-stratification should show that
+# reduction as a positive ctx.variance_reduction, the same "Variance
+# reduction" table column CUPED/RemoveOutliers populate.
+def test_post_stratification_reports_variance_reduction_with_separated_strata():
+    rng = np.random.default_rng(3)
+    n_per_stratum_group = 500
+    rows = []
+    for stratum, level in [("low", 0.0), ("high", 1000.0)]:
+        for grp in ["control", "treatment"]:
+            vals = rng.normal(level, 5, size=n_per_stratum_group)
+            rows.append(pd.DataFrame({"value": vals, "group": grp, "stratum": stratum}))
+    data = pd.concat(rows, ignore_index=True)
+
+    ctx = make_ctx(data["value"], data["group"], stratum=data["stratum"])
+    result_ctx = PostStratification().apply(ctx)
+
+    assert result_ctx.variance_reduction is not None
+    assert result_ctx.variance_reduction > 0.9  # between-stratum spread dominates naive variance
+
+
 def test_post_stratification_no_effect_gives_high_p_value():
     rng = np.random.default_rng(2)
     n = 4000

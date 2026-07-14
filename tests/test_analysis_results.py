@@ -56,3 +56,30 @@ def test_detailed_display_rows_verdict_respects_alpha():
     display_loose = results.detailed_display_rows("control", alpha=0.05)
     assert display_strict[0]["Verdict"] == "no_effect_detected"
     assert display_loose[0]["Verdict"] == "significant_positive"
+
+
+# Item 3.4: a row with no variance-reduction mechanic (variance_reduction is
+# None) keeps the "—" placeholder rather than a misleading 0%/blank value.
+def test_detailed_rows_variance_reduction_placeholder_when_none():
+    results = AnalysisResults([_make_result(p_value=0.03, method="Welch t-test", variance_reduction=None)])
+    row = results.detailed_rows("control")[0]
+    assert row["variance_reduction"] == "—"
+
+
+# Item 3 (variance reduction technique labels): each variance-reduction
+# mechanic gets its own label, inferred from the method's display string
+# (method_display_name()'s prefix chain) — a regression guard for the
+# "PostStratification" (raw class name) vs "Post-stratification" (actual
+# display string) mismatch found while wiring this up.
+def test_detailed_rows_variance_reduction_technique_labels():
+    results = AnalysisResults(
+        [
+            _make_result(p_value=0.03, method="CUPED + Welch t-test", variance_reduction=0.142),
+            _make_result(p_value=0.03, method="Post-stratification", variance_reduction=0.2),
+            _make_result(p_value=0.03, method="RemoveOutliers + Welch t-test", variance_reduction=0.37),
+        ]
+    )
+    rows = {r["method"]: r["variance_reduction"] for r in results.detailed_rows("control")}
+    assert rows["CUPED + Welch t-test"] == "CUPED (14.2%)"
+    assert rows["Post-stratification"] == "PostStrat (20.0%)"
+    assert rows["RemoveOutliers + Welch t-test"] == "Outlier removal (37.0%)"

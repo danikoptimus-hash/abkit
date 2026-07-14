@@ -20,7 +20,7 @@ import { ResultsSection } from './ResultsSection'
 import { HistorySection } from './HistorySection'
 import { MarkdownBlockView } from './MarkdownBlockView'
 import type { BlockDraft } from './MarkdownBlockView'
-import { hypothesisFamily } from './types'
+import { hypothesisFamily, analyzeMetricsFromConfig } from './types'
 
 // The backend doesn't enforce a state machine (any status can be set to any
 // other, abkit/jobs.py::run_update_status) — this is what the status-badge
@@ -460,6 +460,7 @@ export function ExperimentPage() {
                 declaredGroups={Object.keys((data.config.groups as Record<string, number>) ?? {})}
                 unitCol={String(data.config.unit_col ?? '')}
                 alpha={Number(data.config.alpha ?? 0.05)}
+                metrics={analyzeMetricsFromConfig(data.config)}
               />
             ),
           },
@@ -484,6 +485,7 @@ export function ExperimentPage() {
                 }
                 onRemoveBlock={(id) => setDraftBlocks((prev) => prev.filter((x) => x.id !== id))}
                 alpha={Number(data.config.alpha ?? 0.05)}
+                metrics={analyzeMetricsFromConfig(data.config)}
               />
             ),
           },

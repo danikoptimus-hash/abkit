@@ -39,6 +39,21 @@ def _post_csv(n=200, seed_offset=0) -> str:
     return "\n".join(lines)
 
 
+def _post_csv_with_outliers(n=200) -> str:
+    """Same shape/unit-ids as _post_csv, but the first 2 users get an extreme
+    revenue value — item 3.2/3.5: gives RemoveOutliers(upper_q=0.99) real
+    outliers to trim so variance_reduction ends up non-null and positive.
+    Exactly 2 (not more): upper_q=0.99 on n=200 keeps the top ~1% (2 rows) —
+    more identical extreme values would put the quantile threshold ON the
+    outlier plateau itself (inclusive `values <= hi` keeps them all), which
+    is what happened with 5 before this was narrowed down to 2."""
+    lines = ["user_id,revenue"]
+    for i in range(n):
+        value = 100_000 if i < 2 else 95 + i % 15
+        lines.append(f"u{i},{value}")
+    return "\n".join(lines)
+
+
 def _design_config(name: str) -> dict:
     return {
         "name": name,
@@ -470,3 +485,134 @@ def test_deleting_analyzed_dataset_leaves_results_intact(app_client, tmp_path, m
     # frozen at analyze time — survives the dataset row itself being gone
     assert after.json()["run_meta"]["dataset_filename"] == "data.csv"
     assert after.json()["results"] == before.json()["results"]
+
+
+# Item 2 (explicit method selection): AnalyzeRequest.methods is a
+# {metric_name: method_id} override, translated (backend/routers/
+# experiments.py) to the {metric_name: [Step, ...]} shape
+# Experiment.analyze()'s existing `methods` parameter already accepted —
+# the core support was already there, only the API surface was missing.
+def test_analyze_with_explicit_method_override_changes_designed_result(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "manual_method_exp")
+
+    post_dataset_id = _upload_csv(
+        app_client, _post_csv(), kind="post_analysis", experiment_name="manual_method_exp"
+    )
+    resp = app_client.post(
+        "/api/v1/experiments/manual_method_exp/analyze",
+        json={"dataset_id": post_dataset_id, "methods": {"revenue": "mann_whitney"}},
+    )
+    assert resp.status_code == 202
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "completed", job
+
+    results = app_client.get("/api/v1/experiments/manual_method_exp/results").json()
+    revenue_designed = next(
+        r for r in results["results"] if r["metric"] == "revenue" and r["is_designed_method"]
+    )
+    assert revenue_designed["method"] == "Mann-Whitney (Hodges-Lehmann)"
+
+
+def test_analyze_with_unknown_metric_in_methods_override_fails_job(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "bad_method_exp")
+
+    post_dataset_id = _upload_csv(
+        app_client, _post_csv(), kind="post_analysis", experiment_name="bad_method_exp"
+    )
+    resp = app_client.post(
+        "/api/v1/experiments/bad_method_exp/analyze",
+        json={"dataset_id": post_dataset_id, "methods": {"does_not_exist": "welch"}},
+    )
+    assert resp.status_code == 202
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "failed", job
+    assert "does_not_exist" in job["error"]
+
+
+def test_analyze_with_unknown_method_id_fails_job(app_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "bad_method_id_exp")
+
+    post_dataset_id = _upload_csv(
+        app_client, _post_csv(), kind="post_analysis", experiment_name="bad_method_id_exp"
+    )
+    resp = app_client.post(
+        "/api/v1/experiments/bad_method_id_exp/analyze",
+        json={"dataset_id": post_dataset_id, "methods": {"revenue": "not_a_real_method"}},
+    )
+    assert resp.status_code == 202
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "failed", job
+    assert "not_a_real_method" in job["error"]
+
+
+def test_analyze_method_override_with_compare_methods_keeps_extra_chains(app_client, tmp_path, monkeypatch):
+    """Item 2.4: compare_methods=True still runs its full standard set of
+    alternatives — the methods override only changes which one is
+    "designed" (drives the verdict), not the compare set's composition."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "compare_with_override_exp")
+
+    post_dataset_id = _upload_csv(
+        app_client, _post_csv(), kind="post_analysis", experiment_name="compare_with_override_exp"
+    )
+    resp = app_client.post(
+        "/api/v1/experiments/compare_with_override_exp/analyze",
+        json={
+            "dataset_id": post_dataset_id, "compare_methods": True,
+            "methods": {"revenue": "mann_whitney"},
+        },
+    )
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "completed", job
+
+    results = app_client.get("/api/v1/experiments/compare_with_override_exp/results").json()
+    revenue_results = [r for r in results["results"] if r["metric"] == "revenue"]
+    designed = [r for r in revenue_results if r["is_designed_method"]]
+    assert len(designed) == 1
+    assert designed[0]["method"] == "Mann-Whitney (Hodges-Lehmann)"
+    # Standard continuous compare set (unchanged composition, item 2.4):
+    # Welch, RemoveOutliers+Welch, Bootstrap, MannWhitney — independent of
+    # what the designed method was overridden to.
+    alt_methods = {r["method"] for r in revenue_results if not r["is_designed_method"]}
+    assert "Welch t-test" in alt_methods
+    assert "RemoveOutliers + Welch t-test" in alt_methods
+    assert "Bootstrap (bca)" in alt_methods
+    assert "Mann-Whitney (Hodges-Lehmann)" in alt_methods
+
+
+def test_analyze_with_remove_outliers_method_populates_variance_reduction(app_client, tmp_path, monkeypatch):
+    """Item 3.2/3.5: variance_reduction should be non-null and positive on a
+    RemoveOutliers+Welch designed row when the post-period data has real
+    outliers, and flow unchanged through to GET /results — that endpoint has
+    no typed response schema for a single result (get_results in
+    backend/routers/experiments.py returns the raw results.json dict), so
+    this exercises the same to_json() round-trip the frontend actually
+    reads."""
+    monkeypatch.setenv("ABKIT_DATA_DIR", str(tmp_path))
+    _login(app_client)
+    _design_experiment(app_client, "outliers_method_exp")
+    post_dataset_id = _upload_csv(
+        app_client, _post_csv_with_outliers(), kind="post_analysis", experiment_name="outliers_method_exp"
+    )
+    resp = app_client.post(
+        "/api/v1/experiments/outliers_method_exp/analyze",
+        json={"dataset_id": post_dataset_id, "methods": {"revenue": "remove_outliers_welch"}},
+    )
+    assert resp.status_code == 202
+    job = _poll_job(app_client, resp.json()["job_id"])
+    assert job["status"] == "completed", job
+
+    results = app_client.get("/api/v1/experiments/outliers_method_exp/results").json()
+    revenue_designed = next(
+        r for r in results["results"] if r["metric"] == "revenue" and r["is_designed_method"]
+    )
+    assert revenue_designed["method"] == "RemoveOutliers + Welch t-test"
+    assert revenue_designed["variance_reduction"] is not None
+    assert revenue_designed["variance_reduction"] > 0

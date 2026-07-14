@@ -114,6 +114,19 @@ class PostStratification(Step):
                 f"PostStratification: {skipped} stratum/strata skipped (fewer than 2 observations per group)"
             )
 
+        # Item 3.3 (variance reduction column): compare the stratified
+        # estimator's variance against the naive (unstratified) two-sample
+        # mean-difference variance on the same data — same "variance of the
+        # effect estimate" quantity CUPED/RemoveOutliers reduce, just via
+        # stratification instead of a covariate/trimming.
+        naive_var = (
+            control_df["value"].var(ddof=1) / len(control_df) + treat_df["value"].var(ddof=1) / len(treat_df)
+            if len(control_df) > 1 and len(treat_df) > 1
+            else None
+        )
+        if naive_var is not None and naive_var > 0:
+            ctx.variance_reduction = 1 - variance / naive_var
+
         se = variance**0.5
         z_crit = sp_stats.norm.ppf(1 - ctx.alpha / 2)
         p_value = 2 * (1 - sp_stats.norm.cdf(abs(effect / se))) if se > 0 else 1.0

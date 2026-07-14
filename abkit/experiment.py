@@ -85,6 +85,49 @@ def resolve_steps(
     return _default_steps_for_metric(metric)
 
 
+_METHOD_ID_CHAIN_BUILDERS: dict[str, Any] = {
+    "welch": lambda seed: [WelchTTest()],
+    "cuped_welch": lambda seed: [CUPED(), WelchTTest()],
+    "mann_whitney": lambda seed: [MannWhitney()],
+    "bootstrap_bca": lambda seed: [Bootstrap(method="bca", seed=seed)],
+    "remove_outliers_welch": lambda seed: [RemoveOutliers(upper_q=0.99), WelchTTest()],
+    "ztest": lambda seed: [ZTestProportions()],
+    "chi_square": lambda seed: [ChiSquareTest()],
+    "bootstrap_percentile": lambda seed: [Bootstrap(method="percentile", seed=seed)],
+    "delta_method": lambda seed: [DeltaMethodTTest()],
+}
+
+
+def recommended_method_id(metric: MetricConfig) -> str:
+    """Item 2: the type/config-based default method id for a metric — same
+    rule _default_steps_for_metric() encodes as actual Step instances, kept
+    here as an id so the frontend (and run_analyze's "differs from the
+    designed method" warning, item 2.5) can compare a manually-picked id
+    against it without re-deriving the rule. Also how "designed vs manually
+    selected" is later reconstructed from results.json (item 2.3) — by
+    comparing a metric's ACTUAL designed TestResult.method string against
+    this id's chain, not a separately stored flag that could drift."""
+    if metric.type == "binary":
+        return "cuped_welch" if metric.pre_col else "ztest"
+    if metric.type == "ratio":
+        return "delta_method"
+    return "cuped_welch" if metric.pre_col else "welch"
+
+
+def steps_for_method_id(metric: MetricConfig, method_id: str, seed: int | None = None) -> list[Step]:
+    """Item 2 (explicit method selection): maps a UI-facing method id to its
+    Step chain — used to build the `methods` override passed to
+    Experiment.analyze() when the user picks a specific method for a
+    metric, instead of always the type/config-based default. Frontend
+    mirror (options offered per metric type/pre_col, kept manually in sync
+    — same duplication pattern as VERDICT_LABELS etc. elsewhere in this
+    codebase): frontend/src/pages/experiment/methodOptions.ts."""
+    builder = _METHOD_ID_CHAIN_BUILDERS.get(method_id)
+    if builder is None:
+        raise checks.AnalysisError(f"Unknown analysis method '{method_id}' for metric '{metric.name}'")
+    return builder(seed)
+
+
 def compare_methods_chains(metric: MetricConfig, seed: int | None = None) -> list[list[Step]]:
     """Стандартный набор альтернативных цепочек для устойчивости выводов (compare_methods=True).
 

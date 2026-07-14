@@ -79,3 +79,19 @@ export function hypothesisFamily(config: Record<string, unknown>): HypothesisFam
   const treatmentGroupCount = Math.max(Object.keys(groups).length - 1, 0)
   return { primaryCount, treatmentGroupCount, familySize: primaryCount * treatmentGroupCount }
 }
+
+// Item 2 (explicit method selection): the subset of a metric's config the
+// method selector (Analysis tab) and the "manually selected" derivation
+// (Results tab, methodOptions.ts::isManuallySelected) both need — type and
+// whether a pre-period column is set, per metric.
+export interface AnalyzeMetric {
+  name: string
+  type: 'continuous' | 'binary' | 'ratio'
+  hasPreCol: boolean
+}
+
+export function analyzeMetricsFromConfig(config: Record<string, unknown>): AnalyzeMetric[] {
+  const metrics =
+    (config.metrics as { name: string; type: 'continuous' | 'binary' | 'ratio'; pre_col?: string | null }[] | undefined) ?? []
+  return metrics.map((m) => ({ name: m.name, type: m.type, hasPreCol: !!m.pre_col }))
+}

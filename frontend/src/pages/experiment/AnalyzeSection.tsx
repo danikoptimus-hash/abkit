@@ -9,7 +9,8 @@ import { useJobPolling } from '../../api/useJobPolling'
 import { DatasetSelect } from '../../components/DatasetSelect'
 import { AnalyzeResults } from './AnalyzeResults'
 import { experimentResultsQueryKey, fetchExperimentResults } from './resultsQuery'
-import type { HypothesisFamily } from './types'
+import { methodOptions, recommendedMethodId } from './methodOptions'
+import type { HypothesisFamily, AnalyzeMetric } from './types'
 import { PRODUCT_NAME } from '../../branding'
 
 const CORRECTION_OPTIONS = [
@@ -30,7 +31,7 @@ interface PreparedDataset {
 }
 
 export function AnalyzeSection({
-  experimentName, hasAssignments, family, splitSource, declaredGroups, unitCol, alpha,
+  experimentName, hasAssignments, family, splitSource, declaredGroups, unitCol, alpha, metrics,
 }: {
   experimentName: string
   hasAssignments: boolean
@@ -52,6 +53,10 @@ export function AnalyzeSection({
   // The experiment's configured significance level (config.alpha) — drives
   // the Verdict cards/table here the same way it drives the HTML report.
   alpha: number
+  // Item 2 (explicit method selection): type + pre-period-column presence
+  // per metric — drives which methods the selector offers, and is passed
+  // through to AnalyzeResults for the "manually selected" derivation.
+  metrics: AnalyzeMetric[]
 }) {
   const queryClient = useQueryClient()
   const [prepared, setPrepared] = useState<PreparedDataset | null>(null)
@@ -71,6 +76,14 @@ export function AnalyzeSection({
   const [dateCol, setDateCol] = useState<string | undefined>(undefined)
   const showCorrection = family.familySize > 1
   const effectiveCorrection = showCorrection ? correction : 'none'
+
+  // Item 2 (explicit method selection): metric name -> chosen method id.
+  // Absent from this map == "use the recommended default" — a metric never
+  // NEEDS an entry here, so a fresh Analysis tab (nothing touched yet)
+  // still submits the exact same defaults as before this package.
+  const [methodOverrides, setMethodOverrides] = useState<Record<string, string>>({})
+  const namedMetrics = metrics.filter((m) => m.name.trim())
+  const selectedMethodId = (m: AnalyzeMetric) => methodOverrides[m.name] ?? recommendedMethodId(m.type, m.hasPreCol)
 
   // null = follow the default (open until the first result exists, then
   // collapsed behind "Re-run analysis" — UX package, п.3).
@@ -185,11 +198,17 @@ export function AnalyzeSection({
     if (!prepared) return
     if (isExternal && (!groupColumn || !groupMappingComplete)) return
     reset()
+    // Item 2: always send the CURRENTLY EFFECTIVE method for every named
+    // metric, not just the ones the user actually touched — sending the
+    // recommended id for an untouched metric is harmless (produces the
+    // identical Step chain resolve_steps() would have picked anyway), and
+    // this way there's one code path instead of two.
+    const methods = Object.fromEntries(namedMetrics.map((m) => [m.name, selectedMethodId(m)]))
     const { data, error } = await apiClient.POST('/api/v1/experiments/{name}/analyze', {
       params: { path: { name: experimentName } },
       body: {
         dataset_id: prepared.id, correction: effectiveCorrection, compare_methods: compareMethods,
-        date_col: dateCol ?? null,
+        date_col: dateCol ?? null, methods,
         ...(isExternal ? { group_column: groupColumn, group_mapping: groupMapping } : {}),
       },
     })
@@ -220,6 +239,55 @@ export function AnalyzeSection({
               not after (UX package, item A). */}
           <Typography.Text strong>Analysis options</Typography.Text>
           <div style={{ marginTop: 8, marginBottom: 24 }}>
+            {namedMetrics.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+                  Analysis method
+                </Typography.Text>
+                {namedMetrics.map((m) => {
+                  const options = methodOptions(m.type, m.hasPreCol)
+                  const current = selectedMethodId(m)
+                  return (
+                    <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <Typography.Text style={{ width: 140, flexShrink: 0 }} ellipsis={{ tooltip: m.name }}>
+                        {m.name}
+                      </Typography.Text>
+                      <Select
+                        style={{ flex: 1 }}
+                        size="small"
+                        value={current}
+                        disabled={running}
+                        onChange={(id) => setMethodOverrides((prev) => ({ ...prev, [m.name]: id }))}
+                        options={options.map((o) => ({
+                          value: o.id,
+                          label: o.recommended ? `${o.label} (recommended)` : o.label,
+                        }))}
+                        aria-label={`method-select-${m.name}`}
+                      />
+                    </div>
+                  )
+                })}
+                {namedMetrics.some((m) => selectedMethodId(m) !== recommendedMethodId(m.type, m.hasPreCol)) && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginTop: 4 }}
+                    message={
+                      <>
+                        {namedMetrics
+                          .filter((m) => selectedMethodId(m) !== recommendedMethodId(m.type, m.hasPreCol))
+                          .map((m) => (
+                            <div key={m.name}>
+                              <strong>{m.name}</strong>: differs from the designed method — power was calculated
+                              for {methodOptions(m.type, m.hasPreCol).find((o) => o.recommended)?.label}.
+                            </div>
+                          ))}
+                      </>
+                    }
+                  />
+                )}
+              </div>
+            )}
             <Collapse
               size="small"
               style={{ marginBottom: 12 }}

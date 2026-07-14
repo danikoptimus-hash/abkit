@@ -210,10 +210,18 @@ class AnalysisResults:
             if r.variance_reduction is None:
                 variance_reduction_label = "—"
             else:
+                # Item 3 (variance reduction column): technique inferred from
+                # the method's display string (method_display_name() prefixes
+                # applied preprocess/variance_reduction step names ahead of
+                # the test step's own name — see abkit/pipeline.py). Note the
+                # display string is "Post-stratification" (hyphenated,
+                # lowercase), not the raw "PostStratification" class name.
                 if "CUPED" in r.method:
                     technique = "CUPED"
-                elif "PostStratification" in r.method:
+                elif "Post-stratification" in r.method:
                     technique = "PostStrat"
+                elif "RemoveOutliers" in r.method:
+                    technique = "Outlier removal"
                 else:
                     technique = "yes"
                 variance_reduction_label = f"{technique} ({r.variance_reduction:.1%})"

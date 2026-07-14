@@ -87,7 +87,13 @@
     <tbody>
       {% for row in detailed_rows %}
       <tr class="{{ 'designed-row' if detailed_designed_flags[loop.index0] else '' }}">
-        {% for col in detailed_columns %}<td>{{ row[col] if row[col] is not none else '' }}</td>{% endfor %}
+        {% for col in detailed_columns %}
+          {% if col == 'Variance reduction' and row[col] == '—' %}
+          <td title="No variance reduction technique applied">—</td>
+          {% else %}
+          <td>{{ row[col] if row[col] is not none else '' }}</td>
+          {% endif %}
+        {% endfor %}
       </tr>
       {% endfor %}
     </tbody>
@@ -196,12 +202,6 @@
       {% endfor %}
     {% endfor %}
   </table>
-</section>
-
-<section id="section-appendix">
-  <h2>Appendix</h2>
-  <p>{{ product_name }} version: {{ abkit_version }} · seed: {{ seed }}</p>
-  <pre>{{ config_yaml }}</pre>
 </section>
 
 </body>

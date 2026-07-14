@@ -85,6 +85,33 @@ def test_log1p_rejects_negative_values():
         Log1p().apply(ctx)
 
 
+def test_remove_outliers_reports_nonzero_variance_reduction_on_outlier_data():
+    """Item 3.2/3.6: trimming a heavy right tail should measurably shrink the
+    combined-values variance — variance_reduction is None before this change
+    (RemoveOutliers never set it), so any positive value here confirms the
+    wiring, and it should be substantial given how extreme the outliers are."""
+    rng = np.random.default_rng(0)
+    normal_vals = rng.normal(100, 5, size=990)
+    outliers = rng.normal(100_000, 1000, size=10)
+    values = np.concatenate([normal_vals, outliers])
+    group = ["control"] * 500 + ["treatment"] * 500
+
+    ctx = make_ctx(values, group)
+    result_ctx = RemoveOutliers(upper_q=0.99).apply(ctx)
+
+    assert result_ctx.variance_reduction is not None
+    assert result_ctx.variance_reduction > 0.9  # outliers dominated raw variance
+
+
+def test_remove_outliers_variance_reduction_none_when_all_values_identical():
+    values = [1.0] * 100
+    group = ["control"] * 50 + ["treatment"] * 50
+    ctx = make_ctx(values, group)
+
+    result_ctx = RemoveOutliers(upper_q=0.99).apply(ctx)
+    assert result_ctx.variance_reduction is None
+
+
 def test_remove_outliers_keeps_covariate_and_stratum_aligned():
     values = list(range(100)) + [10000]
     group = ["control"] * 100 + ["treatment"]

@@ -795,15 +795,31 @@ def start_analyze(
     data = _load_dataset_df(body.dataset_id, unit_col=unit_col)
 
     def _run(reporter) -> dict[str, Any]:
+        from abkit import checks
         from abkit.db.repositories import ExperimentDatasetRepo
-        from abkit.experiment import Experiment
+        from abkit.experiment import Experiment, steps_for_method_id
         from abkit.jobs import run_analyze
 
         experiment = Experiment.load(name)
+        # Item 2 (explicit method selection): body.methods is {metric_name:
+        # method_id} (UI-facing strings) — translate to the {metric_name:
+        # [Step, ...]} shape Experiment.analyze()'s `methods` override
+        # expects. A metric absent from body.methods is absent here too,
+        # so resolve_steps() falls back to its usual default for it.
+        methods = None
+        if body.methods:
+            metrics_by_name = {m.name: m for m in experiment.config.metrics}
+            methods = {}
+            for metric_name, method_id in body.methods.items():
+                metric = metrics_by_name.get(metric_name)
+                if metric is None:
+                    raise checks.AnalysisError(f"Unknown metric '{metric_name}' in methods override")
+                methods[metric_name] = steps_for_method_id(metric, method_id, seed=experiment.config.seed)
         results = run_analyze(
             user, experiment, data, correction=body.correction,
             compare_methods=body.compare_methods, date_col=body.date_col,
             group_column=body.group_column, group_mapping=body.group_mapping,
+            methods=methods,
             progress_callback=reporter.stage,
             # Stage 2 (report header dates): `exp` (the DB row, fetched
             # above before the job runs) has these; the in-memory
