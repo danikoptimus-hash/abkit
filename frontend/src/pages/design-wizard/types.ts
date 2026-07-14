@@ -115,6 +115,17 @@ export interface WizardState {
   // proportions — see wizardStateFromConfig below) — gates whether the
   // proportions block renders at all (item 3.1c/d).
   sampleSizeResult: SampleSizeResult | null
+  // Item 2.3 (consolidated package): explicit acknowledgment that at least
+  // one group's chosen proportion puts it below the required minimum —
+  // reset to false on every proportion edit/recalculation (SampleSizeSection.tsx)
+  // so an old acknowledgment can never silently cover a NEW, different
+  // shortfall. Only meaningful when anyGroupBelowRequired(state) is true;
+  // otherwise unused. There is deliberately no equivalent "accept" flag for
+  // the AGGREGATE shortfall (not enough total data for the target) — that
+  // one can only be resolved by actually fixing the target (MDE/power) or
+  // explicitly switching to "Use all available data" (sizeMode='all'),
+  // never by just checking a box (item 2.2's "молча пройти нельзя").
+  acceptedGroupShortfall: boolean
 }
 
 export function numericColumns(state: WizardState): string[] {
@@ -169,14 +180,21 @@ export function equalSplitGroups(groups: GroupFormRow[]): GroupFormRow[] {
   return groups.map((g) => ({ ...g, prop: share }))
 }
 
-// Item 3.2: which wizard inputs the last sample-size calculation reflects —
-// changing any of these (MDE/alpha/power/metrics, per spec) after a calc
-// makes the cached SampleSizeResult stale. Deliberately narrower than "every
-// input that could affect the result" (isolation/strata also affect
-// eligible_n) — matches the spec's explicit invalidation list; staleness is
-// a nudge to recalculate, not a hard block on proceeding.
+// Item 1.6 (consolidated package): which wizard inputs the last sample-size
+// calculation reflects — changing any of these (metrics/pre-col, MDE, alpha,
+// power, strata, isolation, or the dataset itself) after a calc makes the
+// cached SampleSizeResult stale. Widened from the original (item 3.2, which
+// only covered MDE/alpha/power/metrics) to also cover strata/isolation/
+// dataset — all of them affect eligible_n or the power calc, so a
+// calculation done before changing any of them is no longer trustworthy.
+// Staleness itself is still just a nudge in the display (SampleSizeSection's
+// "Inputs changed" notice) — DesignWizard.tsx's stepError is what turns it
+// into a hard Next-gate (item 2.1), and it deliberately exempts the
+// Redesign-prefill sentinel inputsKey so an unedited Redesign isn't forced
+// through a recalculation it doesn't need.
 export function sampleSizeInputsKey(state: WizardState): string {
   return JSON.stringify({
+    datasetId: state.datasetId,
     alpha: state.alpha,
     power: state.power,
     sizeMode: state.sizeMode,
@@ -186,7 +204,59 @@ export function sampleSizeInputsKey(state: WizardState): string {
     metrics: state.metrics.map((m) => ({
       name: m.name.trim(), type: m.type, role: m.role, preCol: m.preCol, num: m.num, den: m.den,
     })),
+    strata: state.strata,
+    isolation: state.isolation,
+    isolationSelected: state.isolation === 'exclude_selected' ? state.isolationSelected : [],
   })
+}
+
+// Item 2 (consolidated package, hard Next gate): the Redesign prefill
+// (wizardStateFromConfig) seeds sampleSizeResult with this sentinel instead
+// of a real inputsKey, specifically so it reads as "not blocking" — an
+// unedited Redesign already has real, previously-validated proportions and
+// shouldn't be forced through a fresh Calculate click just to leave this
+// step (matches the pre-existing, more permissive display-only staleness
+// behavior this sentinel was originally introduced for, item 3.2/pt.3).
+export const REDESIGN_PREFILL_SENTINEL = '__redesign_prefill__'
+
+// Item 2.1: true when the cached result no longer reflects the CURRENT
+// inputs and recalculating isn't optional (unlike the cosmetic "stale" flag
+// SampleSizeSection.tsx shows as an info nudge for every case including
+// Redesign) — this is what actually blocks Next.
+export function blockingStale(state: WizardState): boolean {
+  const result = state.sampleSizeResult
+  if (!result) return true
+  if (result.inputsKey === REDESIGN_PREFILL_SENTINEL) return false
+  return result.inputsKey !== sampleSizeInputsKey(state)
+}
+
+// Item 1.1/2.2: "not enough data for the target" — total eligible users
+// fall short of required-per-group × number of groups. Only meaningful when
+// a target actually exists (requiredNPerGroup != null); sizeMode='all' (or
+// no calculation yet) has no target, so this is always false then — which
+// is exactly how "Use all available data anyway" resolves the gate (see
+// SampleSizeSection.tsx's useAllDataAnyway).
+export function aggregateShortfall(state: WizardState): boolean {
+  const result = state.sampleSizeResult
+  if (!result || result.requiredNPerGroup == null || result.eligibleN == null) return false
+  const nGroups = state.groups.length || 1
+  return result.eligibleN < result.requiredNPerGroup * nGroups
+}
+
+// Item 1.4/2.3: a specific group's chosen proportion puts it below the
+// required-per-group minimum, independent of whether the aggregate has
+// enough data overall (e.g. plenty of total data, but an extreme 99/1 split
+// starves the small group). Also always false when there's no target
+// (requiredNPerGroup == null, e.g. sizeMode='all').
+export function groupBelowRequired(state: WizardState, group: GroupFormRow): boolean {
+  const result = state.sampleSizeResult
+  if (!result || result.requiredNPerGroup == null || result.eligibleN == null) return false
+  const groupN = Math.round(group.prop * result.eligibleN)
+  return groupN < result.requiredNPerGroup
+}
+
+export function anyGroupBelowRequired(state: WizardState): boolean {
+  return state.groups.some((g) => groupBelowRequired(state, g))
 }
 
 export function buildDesignConfig(state: WizardState): DesignConfig {
@@ -311,12 +381,13 @@ export function wizardStateFromConfig(config: DesignConfig): Partial<WizardState
     // Redesign prefill: the experiment already has real (not equal-split)
     // saved proportions — show the proportions block immediately instead
     // of gating it behind a fresh Calculate click. inputsKey is a sentinel
-    // that can never match a real sampleSizeInputsKey() snapshot, so it
-    // always reads as stale (a nudge to recalculate, not a hard block —
-    // see Step3Parameters.tsx's SampleSizeSection).
+    // that can never match a real sampleSizeInputsKey() snapshot, so the
+    // cosmetic "stale" notice always shows (a nudge to recalculate) — but
+    // blockingStale() above special-cases this exact sentinel so it never
+    // hard-blocks Next (item 2.1).
     sampleSizeResult:
       config.groups && Object.keys(config.groups).length > 0
-        ? { eligibleN: null, requiredNPerGroup: null, perMetric: [], inputsKey: '__redesign_prefill__' }
+        ? { eligibleN: null, requiredNPerGroup: null, perMetric: [], inputsKey: REDESIGN_PREFILL_SENTINEL }
         : null,
   }
 }

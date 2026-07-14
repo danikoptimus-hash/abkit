@@ -33,6 +33,12 @@ test('create experiment via wizard on demo data, then publish and edit hypothesi
   // by experiments from previous runs, leaving 0 candidates).
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   // Step 4: run
@@ -83,6 +89,12 @@ test('hypothesis entered in the wizard is saved into the experiment\'s Hypothesi
 
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   await page.getByRole('button', { name: 'Design' }).click()
@@ -139,6 +151,12 @@ test('absolute MDE for a binary metric uses percentage points, not raw fractions
 
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   await page.getByRole('button', { name: 'Design' }).click()
@@ -208,6 +226,12 @@ test('a custom significance level set in the wizard is reflected in the experime
 
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   await page.getByRole('button', { name: 'Design' }).click()
@@ -245,6 +269,12 @@ test('group descriptions entered in the wizard show up on the Design tab and in 
 
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   await page.getByRole('button', { name: 'Design' }).click()
@@ -313,6 +343,12 @@ test('wizard: upload 2 flow images, reorder, lightbox, and the design report emb
   await page.getByRole('button', { name: 'Next' }).click()
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   await page.getByRole('button', { name: 'Design' }).click()
@@ -356,6 +392,12 @@ test('experiment with no flow images shows no Variant flows section, on the Desi
 
   await page.getByText(/exclude — exclude participants/).click()
   await page.getByText(/off — exclude no one/).click()
+  // Item 2 (consolidated package, hard Next gate): a fresh, non-stale sample
+  // size calculation is now required before leaving the Parameters step —
+  // demo data's sizeMode='sample_size' matches the dataset's row count
+  // exactly, so this never hits the "not enough data" shortfall path.
+  await page.getByRole('button', { name: 'Calculate sample size' }).click()
+  await expect(page.getByText(/Required per group:|No MDE target set/)).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'Next' }).click()
 
   await page.getByRole('button', { name: 'Design' }).click()

@@ -1,8 +1,11 @@
 import { useState } from 'react'
-import { Typography, Button, Alert, Space, InputNumber, Tooltip } from 'antd'
+import { Typography, Button, Alert, Space, InputNumber, Tooltip, Checkbox } from 'antd'
 import { apiClient, errorMessage } from '../../api/client'
-import { equalSplitGroups, groupsSum, metricsToApi, sampleSizeInputsKey } from './types'
-import type { WizardState } from './types'
+import {
+  equalSplitGroups, groupsSum, metricsToApi, sampleSizeInputsKey,
+  aggregateShortfall, groupBelowRequired, anyGroupBelowRequired,
+} from './types'
+import type { WizardState, SizeMode } from './types'
 
 interface Props {
   state: WizardState
@@ -26,15 +29,21 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
   const canCalculate =
     !!state.datasetId && !!state.unitCol && groupNames.length >= 2 && state.metrics.some((m) => m.name.trim())
 
-  const runCalculate = async () => {
+  // Item 2.2 (hard Next gate): runCalculate always uses state.sizeMode;
+  // useAllDataAnyway (below) calls this with an explicit override instead —
+  // switching to 'all' is the one and only way to resolve an AGGREGATE
+  // shortfall (not enough total data for the target) without actually
+  // fixing the target, so it needs to run against 'all' immediately, before
+  // the setState that would otherwise apply it has landed.
+  const runCalculateWithSizeMode = async (sizeModeOverride: SizeMode) => {
     if (!canCalculate || !state.datasetId || !state.unitCol) return
     setCalculating(true)
     setCalcError(null)
     try {
       let mde: number | null = null
-      if (state.sizeMode === 'mde_rel') {
+      if (sizeModeOverride === 'mde_rel') {
         mde = state.mdeRel
-      } else if (state.sizeMode === 'mde_abs') {
+      } else if (sizeModeOverride === 'mde_abs') {
         const metric = state.metrics.find((m) => m.id === state.mdeAbsMetricId)
         if (!metric) throw new Error('Select a metric for the absolute MDE on this step first')
         const { data: baselineData, error: baselineError } = await apiClient.POST(
@@ -69,8 +78,24 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
       })
       if (error) throw new Error(errorMessage(error))
 
-      const requiredNPerGroup = state.sizeMode === 'sample_size' ? state.sampleSize : data.required_n_per_group
-      const key = sampleSizeInputsKey(state)
+      // Item 2 (hard Next gate) bugfix: config.sample_size is a TOTAL
+      // design size (abkit/experiment.py: `n_control = config.sample_size *
+      // control_prop` — it's multiplied by a PROPORTION, so it can't
+      // itself be a per-group count). state.sampleSize inherits that same
+      // total-not-per-group meaning — dividing by the group count gives the
+      // equal-split per-group figure, consistent with what the MDE-driven
+      // modes' required_n_per_group already represents (the preview always
+      // assumes an equal split, per abkit/jobs.py::preview_sample_size).
+      // Before this gate existed the bug was harmless (display-only + the
+      // "Minimize control" convenience math); now it would otherwise make
+      // the aggregate-shortfall gate spuriously trip for every
+      // sizeMode='sample_size' design (demo data's default mode) at 2+
+      // groups.
+      const requiredNPerGroup =
+        sizeModeOverride === 'sample_size'
+          ? Math.round(state.sampleSize / (groupNames.length || 1))
+          : data.required_n_per_group
+      const key = sampleSizeInputsKey({ ...state, sizeMode: sizeModeOverride })
       setState((prev) => {
         // Only reset to an equal split the FIRST time a calculation lands
         // (prev.sampleSizeResult === null) — a recalculation after editing
@@ -79,6 +104,7 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
         const firstCalc = prev.sampleSizeResult === null
         return {
           ...prev,
+          sizeMode: sizeModeOverride,
           groups: firstCalc ? equalSplitGroups(prev.groups) : prev.groups,
           sampleSizeResult: {
             eligibleN: data.eligible_n,
@@ -88,6 +114,10 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
             })),
             inputsKey: key,
           },
+          // Item 2.3: a fresh calculation invalidates any prior "proceed
+          // anyway" acknowledgment — it may no longer apply to the new
+          // result (different requiredNPerGroup/eligibleN).
+          acceptedGroupShortfall: false,
         }
       })
     } catch (e) {
@@ -96,31 +126,50 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
       setCalculating(false)
     }
   }
+  const runCalculate = () => runCalculateWithSizeMode(state.sizeMode)
+  const useAllDataAnyway = () => runCalculateWithSizeMode('all')
 
   const result = state.sampleSizeResult
   const stale = result !== null && result.inputsKey !== sampleSizeInputsKey(state)
   const showProportions = result !== null || isRedesign
   const sum = groupsSum(state)
   const sumOk = Math.abs(sum - 1) < 1e-6
+  const notEnoughData = aggregateShortfall(state)
+  const anyBelowRequired = anyGroupBelowRequired(state)
   const nGroups = state.groups.length || 1
   const totalRequired = result?.requiredNPerGroup != null ? result.requiredNPerGroup * nGroups : null
-  const notEnoughData =
-    result?.eligibleN != null && totalRequired != null && result.eligibleN < totalRequired
 
-  // Item 3.1e: control gets the minimum required for power; the rest is
+  // Item 2.3: reset the group-shortfall acknowledgment on every proportion
+  // edit (share, count, or Minimize control) — an old "I accept this" can
+  // never silently cover a NEW split the user hasn't actually looked at.
+  const updateGroups = (updater: (groups: WizardState['groups']) => WizardState['groups']) =>
+    setState((prev) => ({ ...prev, groups: updater(prev.groups), acceptedGroupShortfall: false }))
+
+  const updateShare = (id: string, prop: number) =>
+    updateGroups((groups) => groups.map((g) => (g.id === id ? { ...g, prop } : g)))
+
+  // Item 1.5 (shares <-> headcount): editing the count field recomputes the
+  // proportion from it (count / eligibleN) — the two representations are
+  // always kept in sync through `prop`, the single source of truth; count
+  // is purely derived for display/editing, never stored separately.
+  const updateCount = (id: string, count: number, eligibleN: number) =>
+    updateGroups((groups) => groups.map((g) => (g.id === id ? { ...g, prop: eligibleN > 0 ? count / eligibleN : 0 } : g)))
+
+  // Item 1.3: control gets the minimum required for power; the rest is
   // split evenly among the remaining (treatment) group(s).
+  const controlId =
+    state.groups.find((g) => g.name.trim().toLowerCase() === 'control')?.id ?? state.groups[0]?.id
+  const minimizeControlShare =
+    result?.requiredNPerGroup && result.eligibleN
+      ? Math.min(0.95, Math.max(0.01, result.requiredNPerGroup / result.eligibleN))
+      : null
   const minimizeControl = () => {
-    if (!result?.requiredNPerGroup || !result.eligibleN) return
-    const controlId =
-      state.groups.find((g) => g.name.trim().toLowerCase() === 'control')?.id ?? state.groups[0]?.id
-    if (!controlId) return
-    const controlShare = Math.min(0.95, Math.max(0.01, result.requiredNPerGroup / result.eligibleN))
+    if (minimizeControlShare == null || !controlId) return
     const others = state.groups.filter((g) => g.id !== controlId)
-    const otherShare = others.length > 0 ? (1 - controlShare) / others.length : 0
-    setState((prev) => ({
-      ...prev,
-      groups: prev.groups.map((g) => (g.id === controlId ? { ...g, prop: controlShare } : { ...g, prop: otherShare })),
-    }))
+    const otherShare = others.length > 0 ? (1 - minimizeControlShare) / others.length : 0
+    updateGroups((groups) =>
+      groups.map((g) => (g.id === controlId ? { ...g, prop: minimizeControlShare } : { ...g, prop: otherShare })),
+    )
   }
 
   return (
@@ -157,7 +206,29 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
               showIcon
               style={{ marginBottom: 12, maxWidth: 560 }}
               message="Not enough data for this target"
-              description={`You need ~${totalRequired} users total (${result.requiredNPerGroup} per group × ${nGroups} groups), but only ${result.eligibleN} are eligible. Consider a larger MDE, lower power, or switching to "Use all available data".`}
+              description={
+                <>
+                  <div>
+                    You need ~{totalRequired} users total ({result.requiredNPerGroup} per group × {nGroups} groups),
+                    but only {result.eligibleN} are eligible. Pick one:
+                  </div>
+                  <ul style={{ marginBottom: 4, paddingLeft: 20 }}>
+                    <li>Increase the MDE above (a bigger effect needs fewer users)</li>
+                    <li>Lower the power target above</li>
+                    <li>
+                      Or{' '}
+                      <Button size="small" loading={calculating} onClick={useAllDataAnyway}>
+                        use all available data anyway
+                      </Button>{' '}
+                      — no fixed target, power reflects what {result.eligibleN} users actually give you
+                    </li>
+                  </ul>
+                  {/* Item 2.2: no checkbox bypass here on purpose — this can only be
+                      resolved by actually changing the target above (recalculate)
+                      or the explicit "use all available data" action, never by
+                      just acknowledging the warning. */}
+                </>
+              }
             />
           )}
           {stale && (
@@ -179,14 +250,22 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
               Minimize control group
             </Button>
           </Tooltip>
+          {/* Item 1.3: caption states the ACTUAL numbers this button would set
+              (computed the same way minimizeControl() itself does), not just
+              a generic description — visible before clicking, not just after. */}
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, maxWidth: 500, marginTop: -8 }}>
-            Sets control to the minimum required for power, the rest goes to treatment.
+            {minimizeControlShare != null && result?.eligibleN != null
+              ? `Control gets the minimum required for power (${Math.round(minimizeControlShare * result.eligibleN)} users, ${(minimizeControlShare * 100).toFixed(1)}%), the rest is split equally between treatment groups.`
+              : 'Sets control to the minimum required for power, the rest is split equally between treatment groups.'}
           </Typography.Paragraph>
 
           {state.groups.map((g) => {
             const eligibleForCount = result?.eligibleN ?? null
-            const groupN = eligibleForCount != null ? Math.floor(g.prop * eligibleForCount) : null
-            const belowRequired = result?.requiredNPerGroup != null && groupN != null && groupN < result.requiredNPerGroup
+            // Item 1.5: count is DERIVED from prop (not a second stored
+            // field) — editing either field writes back to the same
+            // `prop`, so the two representations can never disagree.
+            const groupN = eligibleForCount != null ? Math.round(g.prop * eligibleForCount) : null
+            const belowRequired = groupBelowRequired(state, g)
             return (
               <div key={g.id} style={{ marginBottom: 8 }}>
                 <Space>
@@ -199,16 +278,22 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
                     step={0.01}
                     value={g.prop}
                     aria-label={`group-share-${g.name.trim() || g.id}`}
-                    onChange={(v) =>
-                      setState((prev) => ({
-                        ...prev,
-                        groups: prev.groups.map((x) => (x.id === g.id ? { ...x, prop: v ?? 0 } : x)),
-                      }))
-                    }
+                    onChange={(v) => updateShare(g.id, v ?? 0)}
                   />
-                  <Typography.Text type="secondary">
-                    {(g.prop * 100).toFixed(1)}%{groupN != null ? ` · ~${groupN} users` : ''}
-                  </Typography.Text>
+                  <Typography.Text type="secondary">{(g.prop * 100).toFixed(1)}%</Typography.Text>
+                  {eligibleForCount != null && (
+                    <>
+                      <InputNumber
+                        min={0}
+                        max={eligibleForCount}
+                        step={1}
+                        value={groupN}
+                        aria-label={`group-count-${g.name.trim() || g.id}`}
+                        onChange={(v) => updateCount(g.id, v ?? 0, eligibleForCount)}
+                      />
+                      <Typography.Text type="secondary">users (of {eligibleForCount})</Typography.Text>
+                    </>
+                  )}
                 </Space>
                 {belowRequired && (
                   <Alert
@@ -224,9 +309,22 @@ export function SampleSizeSection({ state, setState, isRedesign }: Props) {
           <Alert
             type={sumOk ? 'success' : 'warning'}
             showIcon
-            message={`Sum of proportions: ${sum.toFixed(3)}${sumOk ? '' : ' — must equal 1'}`}
-            style={{ marginTop: 8, maxWidth: 400 }}
+            message={`Sum of proportions: ${sum.toFixed(3)} (~${Math.round(sum * (result?.eligibleN ?? 0))} of ${result?.eligibleN ?? 0} users)${sumOk ? '' : ' — must equal 1'}`}
+            style={{ marginTop: 8, maxWidth: 480 }}
           />
+          {/* Item 2.3: the per-group shortfall gate has an explicit bypass
+              (unlike the aggregate one above) — a lopsided split is a
+              deliberate allocation choice the user can knowingly accept,
+              not a hard data-availability wall. */}
+          {anyBelowRequired && (
+            <Checkbox
+              checked={state.acceptedGroupShortfall}
+              onChange={(e) => setState((prev) => ({ ...prev, acceptedGroupShortfall: e.target.checked }))}
+              style={{ marginTop: 8 }}
+            >
+              I understand the group(s) above will get less than the required minimum — proceed anyway
+            </Checkbox>
+          )}
         </div>
       )}
     </div>

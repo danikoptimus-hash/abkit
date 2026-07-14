@@ -7,7 +7,10 @@ import { Step1Data } from './design-wizard/Step1Data'
 import { Step2GroupsMetrics } from './design-wizard/Step2GroupsMetrics'
 import { Step3Parameters } from './design-wizard/Step3Parameters'
 import { Step4Review } from './design-wizard/Step4Review'
-import { nextId, groupsSum, wizardStateFromConfig } from './design-wizard/types'
+import {
+  nextId, groupsSum, wizardStateFromConfig,
+  blockingStale, aggregateShortfall, anyGroupBelowRequired,
+} from './design-wizard/types'
 import type { WizardState, DesignConfig } from './design-wizard/types'
 
 const INITIAL_STATE: WizardState = {
@@ -40,6 +43,7 @@ const INITIAL_STATE: WizardState = {
   isolation: 'exclude',
   isolationSelected: [],
   sampleSizeResult: null,
+  acceptedGroupShortfall: false,
 }
 
 function stepError(step: number, state: WizardState): string | null {
@@ -59,7 +63,27 @@ function stepError(step: number, state: WizardState): string | null {
     if (!state.metrics.some((m) => m.name.trim())) return 'Add at least one metric'
   }
   if (step === 2 && !isExternal) {
+    // Item 2 (consolidated package, hard Next gate): a calculation must
+    // exist and still reflect the current inputs before proceeding — this
+    // is what makes the sample-size-first flow (item 1) actually mean
+    // something, rather than just being a suggested order the user can
+    // ignore. blockingStale() exempts the Redesign-prefill sentinel, so an
+    // untouched Redesign can still proceed without a fresh calculation.
+    if (!state.sampleSizeResult) return 'Calculate sample size first'
+    if (blockingStale(state)) return 'Parameters changed — recalculate the sample size'
+    // 2.2: aggregate shortfall (not enough total data for the target) has
+    // no checkbox bypass — must be resolved by changing the target or
+    // explicitly switching to "Use all available data" (both of which
+    // clear this by construction, see SampleSizeSection.tsx).
+    if (aggregateShortfall(state)) {
+      return 'Not enough data for this target — increase the MDE, lower power, or use all available data'
+    }
     if (Math.abs(groupsSum(state) - 1) > 1e-6) return 'Group proportions must sum to 1'
+    // 2.3: a per-group shortfall (lopsided split) CAN be proceeded past,
+    // but only with an explicit acknowledgment.
+    if (anyGroupBelowRequired(state) && !state.acceptedGroupShortfall) {
+      return 'Confirm the group-size warning below, or adjust the proportions, before continuing'
+    }
   }
   return null
 }
@@ -261,9 +285,11 @@ export function DesignWizardPage() {
           {error && <Alert type="warning" showIcon message={error} style={{ marginBottom: 12, maxWidth: 500 }} />}
           <Space>
             {current > 0 && <Button onClick={() => setCurrent((c) => c - 1)}>Back</Button>}
-            <Button type="primary" disabled={!!error} onClick={() => setCurrent((c) => c + 1)}>
-              Next
-            </Button>
+            <Tooltip title={error ?? ''}>
+              <Button type="primary" disabled={!!error} onClick={() => setCurrent((c) => c + 1)}>
+                Next
+              </Button>
+            </Tooltip>
           </Space>
         </div>
       )}
