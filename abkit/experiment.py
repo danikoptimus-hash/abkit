@@ -455,10 +455,25 @@ def compute_power_results(
                 rho = power.correlation_with_pre(metric_values, pre_series)
 
         result = power.PowerResult(
-            metric=metric.name, metric_type=metric.type, baseline_mean=mean, baseline_std=std, rho=rho
+            metric=metric.name,
+            metric_type=metric.type,
+            baseline_mean=mean,
+            baseline_std=std,
+            rho=rho,
+            metric_role=metric.role,
         )
 
-        if config.mde is not None:
+        # Item 5 fix: a secondary metric never inherits config.mde as its own
+        # target — that number is the user's typed goal for the metric(s)
+        # actually driving sample size (primary), and a secondary metric has
+        # its own baseline/variance. Regardless of sizeMode, report the
+        # secondary metric's honest achievable MDE at the ACTUAL final
+        # per-group n. run_split() always splits the full isolated candidate
+        # pool — config.sample_size never actually subsamples it — so
+        # n_control_available (not config.sample_size) is that true n.
+        if metric.role == "secondary":
+            _fill_achievable_mde(result, metric, mean, std, rho, n_control_available, alpha, config.power, ratio)
+        elif config.mde is not None:
             if metric.type == "binary":
                 p_treat = mean * (1 + config.mde)
                 if not 0 < p_treat < 1:
@@ -523,33 +538,54 @@ def compute_power_results(
                 )
         else:
             n_control = config.sample_size * control_prop if config.sample_size else n_control_available
-            if metric.type == "binary":
-                mde_delta = power.mde_binary(mean, n_control, alpha=alpha, power=config.power, ratio=ratio)
-                result.sample_size_per_group = n_control
-                result.mde_abs = mde_delta
-                result.mde_rel = mde_delta / mean if mean else None
-                if rho is not None:
-                    mde_delta_cuped = power.mde_binary_cuped(
-                        mean, rho, n_control, alpha=alpha, power=config.power, ratio=ratio
-                    )
-                    result.sample_size_per_group_cuped = n_control
-                    result.mde_abs_cuped = mde_delta_cuped
-                    result.mde_rel_cuped = mde_delta_cuped / mean if mean else None
-            else:
-                mde_abs = power.mde_continuous(std, n_control, alpha=alpha, power=config.power, ratio=ratio)
-                result.sample_size_per_group = n_control
-                result.mde_abs = mde_abs
-                result.mde_rel = mde_abs / mean if mean else None
-                if rho is not None:
-                    std_cuped = std * power.cuped_variance_multiplier(rho) ** 0.5
-                    mde_abs_cuped = power.mde_continuous(std_cuped, n_control, alpha=alpha, power=config.power, ratio=ratio)
-                    result.sample_size_per_group_cuped = n_control
-                    result.mde_abs_cuped = mde_abs_cuped
-                    result.mde_rel_cuped = mde_abs_cuped / mean if mean else None
+            _fill_achievable_mde(result, metric, mean, std, rho, n_control, alpha, config.power, ratio)
 
         result.warnings = warnings
         results[metric.name] = result
     return results
+
+
+def _fill_achievable_mde(
+    result: power.PowerResult,
+    metric: MetricConfig,
+    mean: float,
+    std: float,
+    rho: float | None,
+    n_control: float,
+    alpha: float,
+    power_target: float,
+    ratio: float,
+) -> None:
+    """Achievable-MDE-at-fixed-n: the minimum relative/absolute effect
+    detectable for `metric` with its OWN baseline/variance, given n_control
+    already fixed by something else (primary-metric sample size, or actual
+    available data). Shared by the config.mde-is-None sizing path and by
+    every secondary metric (item 5) — those two callers previously
+    duplicated this formula, and the secondary-metric path used to be
+    missing entirely (secondary metrics wrongly inherited config.mde)."""
+    if metric.type == "binary":
+        mde_delta = power.mde_binary(mean, n_control, alpha=alpha, power=power_target, ratio=ratio)
+        result.sample_size_per_group = n_control
+        result.mde_abs = mde_delta
+        result.mde_rel = mde_delta / mean if mean else None
+        if rho is not None:
+            mde_delta_cuped = power.mde_binary_cuped(
+                mean, rho, n_control, alpha=alpha, power=power_target, ratio=ratio
+            )
+            result.sample_size_per_group_cuped = n_control
+            result.mde_abs_cuped = mde_delta_cuped
+            result.mde_rel_cuped = mde_delta_cuped / mean if mean else None
+    else:
+        mde_abs = power.mde_continuous(std, n_control, alpha=alpha, power=power_target, ratio=ratio)
+        result.sample_size_per_group = n_control
+        result.mde_abs = mde_abs
+        result.mde_rel = mde_abs / mean if mean else None
+        if rho is not None:
+            std_cuped = std * power.cuped_variance_multiplier(rho) ** 0.5
+            mde_abs_cuped = power.mde_continuous(std_cuped, n_control, alpha=alpha, power=power_target, ratio=ratio)
+            result.sample_size_per_group_cuped = n_control
+            result.mde_abs_cuped = mde_abs_cuped
+            result.mde_rel_cuped = mde_abs_cuped / mean if mean else None
 
 
 def _power_results_to_dict(results: dict[str, power.PowerResult]) -> dict[str, Any]:
@@ -566,6 +602,7 @@ def _power_results_to_dict(results: dict[str, power.PowerResult]) -> dict[str, A
             "mde_rel_cuped": r.mde_rel_cuped,
             "sample_size_per_group_cuped": r.sample_size_per_group_cuped,
             "warnings": r.warnings,
+            "metric_role": r.metric_role,
         }
         for name, r in results.items()
     }

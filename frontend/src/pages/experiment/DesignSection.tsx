@@ -255,6 +255,7 @@ function mdeTable(computed: ComputedDesignSummary) {
     key: metricName,
     metric: metricName,
     metricType: p.metric_type,
+    metricRole: p.metric_role,
     baseline: p.baseline_mean,
     n_per_group: p.sample_size_per_group,
     mde_rel: p.mde_rel,
@@ -265,9 +266,23 @@ function mdeTable(computed: ComputedDesignSummary) {
     n_per_group_cuped: p.sample_size_per_group_cuped,
   }))
   const hasCuped = rows.some((r) => r.rho !== null && r.rho !== undefined)
+  const hasSecondary = rows.some((r) => r.metricRole === 'secondary')
 
   const columns = [
-    { title: 'Metric', dataIndex: 'metric' },
+    {
+      title: 'Metric',
+      dataIndex: 'metric',
+      render: (v: string, record: (typeof rows)[number]) =>
+        record.metricRole === 'secondary' ? (
+          <Tooltip title="Secondary MDE is the minimal detectable effect at the chosen sample size (sample size is driven by primary metrics)">
+            <span>
+              {v} <sup>†</sup>
+            </span>
+          </Tooltip>
+        ) : (
+          v
+        ),
+    },
     {
       title: (
         <Tooltip title="Average value before the test — conversion rate, shown as %, for binary metrics">
@@ -316,7 +331,17 @@ function mdeTable(computed: ComputedDesignSummary) {
       : []),
   ]
 
-  return <Table size="small" dataSource={rows} columns={columns} pagination={false} />
+  return (
+    <>
+      <Table size="small" dataSource={rows} columns={columns} pagination={false} />
+      {hasSecondary && (
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+          † Secondary MDE is the minimal detectable effect at the chosen sample size (sample size is driven by
+          primary metrics).
+        </Typography.Text>
+      )}
+    </>
+  )
 }
 
 // Item 1.4: per-metric power warnings (e.g. the implausible-sample-size

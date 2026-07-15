@@ -100,7 +100,7 @@
     {% set abs_unit = 'pp' if row.metric_type == 'binary' else '' %}
     {% set abs_scale = 100 if row.metric_type == 'binary' else 1 %}
     <tr>
-      <td>{{ row.metric }}</td>
+      <td>{{ row.metric }}{% if row.metric_role == 'secondary' %} <sup title="secondary metric — see footnote below">†</sup>{% endif %}</td>
       <td>{{ '%.3f%%' % (row.mde_rel*100) if row.mde_rel is not none else '-' }}</td>
       <td>{{ '%.3f%s' % (row.mde_abs*abs_scale, abs_unit) if row.mde_abs is not none else '-' }}</td>
       {% if row.mde_rel_cuped is none %}
@@ -125,6 +125,9 @@
     {% endif %}
     {% endfor %}
   </table>
+  {% if power_rows|selectattr('metric_role', 'equalto', 'secondary')|list %}
+  <p><small>† Secondary MDE is the minimal detectable effect at the chosen sample size (sample size is driven by primary metrics).</small></p>
+  {% endif %}
   {{ help_details('mde_table', True) }}
 </section>
 

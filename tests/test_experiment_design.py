@@ -485,3 +485,67 @@ def test_design_low_nan_fraction_no_attention_warning(tmp_path):
     experiment = Experiment.design(config, data, experiments_dir=tmp_path)
 
     assert not any("Check the data quality" in w for w in experiment.report.warnings)
+
+
+def make_secondary_mde_data(n=20_000, seed=7):
+    """Item 5: two secondary metrics with deliberately different variance
+    (std=5 vs std=50, same mean) — a correct implementation must give them
+    different MDEs; the pre-fix bug gave every metric config.mde verbatim,
+    so both secondaries would come out identical (and equal to 0.1)."""
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame(
+        {
+            "user_id": [f"u{i}" for i in range(n)],
+            "primary_metric": rng.normal(100, 20, size=n),
+            "sec_low_var": rng.normal(100, 5, size=n),
+            "sec_high_var": rng.normal(100, 50, size=n),
+        }
+    )
+
+
+def test_design_secondary_metrics_get_honest_own_mde_not_a_copy_of_primary_target(tmp_path):
+    """Item 5 (critical fix): secondary metrics must NOT inherit config.mde
+    (the primary metric's typed target) — each gets its own achievable MDE
+    at the actual final per-group n, computed from its OWN baseline/variance.
+    Cross-checked against an independent statsmodels calculation at the same
+    n/alpha/power (not just "differs from primary")."""
+    from statsmodels.stats.power import NormalIndPower
+
+    data = make_secondary_mde_data()
+    config = make_config(
+        name="secondary_mde_honesty",
+        metrics=[
+            MetricConfig(name="primary_metric", type="continuous", role="primary"),
+            MetricConfig(name="sec_low_var", type="continuous", role="secondary"),
+            MetricConfig(name="sec_high_var", type="continuous", role="secondary"),
+        ],
+        strata=[],
+        mde=0.1,  # target for the primary metric only
+    )
+    experiment = Experiment.design(config, data, experiments_dir=tmp_path)
+    pr_primary = experiment.report.power_results["primary_metric"]
+    pr_low = experiment.report.power_results["sec_low_var"]
+    pr_high = experiment.report.power_results["sec_high_var"]
+
+    # Primary metric's behavior is completely unchanged: it still hits the
+    # user's typed relative target exactly.
+    assert pr_primary.mde_rel == pytest.approx(0.1)
+
+    # Secondary metrics never copy the primary's target...
+    assert pr_low.mde_rel != pytest.approx(0.1, rel=0.05)
+    assert pr_high.mde_rel != pytest.approx(0.1, rel=0.05)
+    # ...and, since they have different variance, get different MDEs from
+    # each other (the bug being fixed made every metric identical).
+    assert pr_low.mde_rel != pytest.approx(pr_high.mde_rel, rel=0.05)
+    assert pr_high.mde_abs > pr_low.mde_abs  # higher variance -> harder to detect a small effect
+
+    # Cross-check the honest secondary MDE against an independent reference
+    # (statsmodels), at the SAME n_control/alpha/power used by the design.
+    n_control = pr_low.sample_size_per_group
+    assert n_control == pytest.approx(len(data) / 2, rel=0.01)  # actual split n, not a subsample
+    for pr, std in [(pr_low, 5.0), (pr_high, 50.0)]:
+        effect_size = NormalIndPower().solve_power(
+            nobs1=pr.sample_size_per_group, alpha=0.05, power=0.8, ratio=1.0, alternative="two-sided"
+        )
+        reference_mde_abs = effect_size * std
+        assert pr.mde_abs == pytest.approx(reference_mde_abs, rel=0.03)

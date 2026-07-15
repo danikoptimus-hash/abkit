@@ -27,6 +27,10 @@ class PowerResult:
     mde_rel_cuped: float | None = None
     sample_size_per_group_cuped: float | None = None
     warnings: list[str] = field(default_factory=list)
+    # Item 5: secondary metrics always report their own achievable MDE (never
+    # a copy of the primary metric's target) — surfaced here so callers
+    # (design_report, Design tab) can show a footnote next to those rows.
+    metric_role: Literal["primary", "secondary"] = "primary"
 
 
 MIN_PLAUSIBLE_SAMPLE_SIZE_PER_GROUP = 10

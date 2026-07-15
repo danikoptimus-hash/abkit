@@ -13,6 +13,10 @@ export interface PowerResult {
   mde_rel_cuped: number | null
   sample_size_per_group_cuped: number | null
   warnings: string[]
+  // Item 5: secondary metrics always carry their own achievable MDE (never
+  // a copy of the primary metric's target) — the Design tab uses this to
+  // show a footnote next to those rows.
+  metric_role: 'primary' | 'secondary'
 }
 
 export interface CheckResult {

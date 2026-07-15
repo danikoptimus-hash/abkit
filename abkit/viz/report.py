@@ -336,6 +336,7 @@ def render_design_report(
             sample_size=pr.sample_size_per_group,
             rho=pr.rho,
             warnings=pr.warnings,
+            metric_role=pr.metric_role,
         )
         for name, pr in report.power_results.items()
     ]
