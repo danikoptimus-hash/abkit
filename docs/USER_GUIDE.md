@@ -349,7 +349,23 @@ The design report always includes:
   copy of whatever target MDE you typed for the primary metric — and is
   flagged with a "†" footnote: "Secondary MDE is the minimal detectable
   effect at the chosen sample size (sample size is driven by primary
-  metrics)."
+  metrics)." Each row also carries an explicit **primary**/**secondary** tag,
+  and the table always lists primary metrics first (in the order you added
+  them), secondary metrics after — regardless of the order you declared them
+  in during design. A metric whose relative MDE comes out **above 100% of
+  its own baseline** gets a soft yellow highlight with a ⚠, tooltipped "MDE
+  exceeds the baseline — for rare metrics like this the configured absolute
+  MDE may be unrealistic to detect" — informational only, it never blocks
+  anything.
+- **Required n per group** — the old "n per group" column, renamed and
+  tooltipped ("Minimum group size to detect this metric's MDE at given
+  α/power. Differs per metric — depends on its variance") and always rounded
+  **up** (you need *at least* this many, never fewer). Below the table, an
+  **Actual group sizes** line states what the real split actually produced,
+  by group name ("Actual group sizes: control 25,000 · test 25,000") — if
+  any metric's required n exceeds the smallest actual group, a warning names
+  it explicitly ("turnover requires 31,837 per group — actual is below
+  (power under target for this metric)").
 - **Stratification** — the Design tab's Configuration panel and the design
   report both state it explicitly: "Stratified by: gender, platform (12
   strata after combination, min stratum size: 20)" when you stratified,
@@ -451,7 +467,12 @@ The **Results** tab has, per metric:
 - **Detailed results table** — every numeric column (effect, lift, CI bounds,
   p-value, p-value (adj.), CUPED ρ, variance reduction) is shown to exactly 3
   decimal places, consistently in the table itself, the CSV export, and the
-  HTML report. Columns worth knowing:
+  HTML report. Row order is the same in all three: primary metrics first
+  (in the order you added them), secondary after; within a metric, the
+  designed method's row comes first, comparison-alternative methods after —
+  not alphabetical by metric or method name. The verdict cards above the
+  table (Analysis and Results tabs) follow the same primary-first order.
+  Columns worth knowing:
   - **Effect (abs.)** — absolute difference, test − control, in metric units.
   - **Lift %** — relative effect: (test − control) / control.
   - **95% CI of lift** — confidence interval of the *relative* effect, not of
