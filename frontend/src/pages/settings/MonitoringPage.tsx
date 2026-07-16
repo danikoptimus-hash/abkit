@@ -10,6 +10,12 @@ import { chartColors } from '../../charts/theme'
 import { MonitoringLineChart } from '../../charts/MonitoringLineChart'
 import { formatBytes, formatMb } from '../../monitoringFormat'
 
+// Item 6 (audit-details+ package): moved out of a tab on the Admin > Users
+// page (pages/Admin.tsx) into its own route/page — Monitoring isn't related
+// to user management, it just happened to share the admin-only gate. Same
+// component, same behavior, just its own Settings menu entry instead of a
+// second tab most admins never opened while looking at the user list.
+
 // Disk-free stat card turns to a warning once less than this fraction of
 // total disk space remains — matches the feature request's "warning
 // highlight when disk free < 15%".
@@ -64,7 +70,7 @@ function StatCard({
   )
 }
 
-export function MonitoringPanel() {
+export function MonitoringPage() {
   const [range, setRange] = useState<RangeValue>('24h')
 
   const { data: current, isLoading: currentLoading } = useQuery({
@@ -74,8 +80,8 @@ export function MonitoringPanel() {
       if (error) throw new Error(errorMessage(error))
       return data
     },
-    // Feels "live" while the tab is open, without hammering the collector —
-    // matches the collector's own 60s snapshot cadence.
+    // Feels "live" while the page is open, without hammering the collector
+    // — matches the collector's own 60s snapshot cadence.
     refetchInterval: 60_000,
   })
 
@@ -111,6 +117,10 @@ export function MonitoringPanel() {
 
   return (
     <div>
+      <Typography.Title level={4} style={{ marginBottom: 16 }}>
+        Monitoring
+      </Typography.Title>
+
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <StatCard

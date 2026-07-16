@@ -52,6 +52,10 @@ export function AppLayout() {
           { key: 'security-label', label: 'Security', type: 'group' as const },
           { key: 'admin', label: <Link to="/admin">List Users</Link> },
           { key: 'audit', label: <Link to="/audit">Action Log</Link> },
+          // Item 6 (audit-details+ package): moved out of a tab on List
+          // Users into its own page — grouped here (not Tools below) since
+          // it must stay admin-only, unlike Tools which editors can reach.
+          { key: 'monitoring', label: <Link to="/settings/monitoring">Monitoring</Link> },
           { type: 'divider' as const },
           { key: 'data-label', label: 'Data', type: 'group' as const },
           { key: 'db-connections', label: <Link to="/admin/db-connections">Database Connections</Link> },

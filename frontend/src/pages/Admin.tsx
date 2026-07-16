@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Table, Button, Modal, Form, Input, Select, Switch, message, Typography, Space, Tag, Tabs } from 'antd'
+import { Table, Button, Modal, Form, Input, Select, Switch, message, Typography, Space, Tag } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { apiClient, errorMessage } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
-import { MonitoringPanel } from './admin/MonitoringPanel'
 import type { components } from '../api/schema'
 
 type UserAdminOut = components['schemas']['UserAdminOut']
@@ -227,12 +226,10 @@ export function AdminPage() {
     </div>
   )
 
-  return (
-    <Tabs
-      items={[
-        { key: 'users', label: 'Users', children: usersTab },
-        { key: 'monitoring', label: 'Monitoring', children: <MonitoringPanel /> },
-      ]}
-    />
-  )
+  // Item 6 (audit-details+ package): Monitoring used to be a second tab
+  // here — it moved to its own page (pages/settings/MonitoringPage.tsx,
+  // routed at /settings/monitoring) since it has nothing to do with user
+  // management beyond sharing the admin-only gate. Single tab left, so this
+  // now returns the Users content directly instead of wrapping it in Tabs.
+  return usersTab
 }

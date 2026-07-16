@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { loginViaUi } from './helpers'
 
-// Admin monitoring panel: resource usage + persistent history. The
-// collector's own 60s timer is too slow for a deterministic e2e test, so
-// this forces a snapshot via the admin-only POST endpoint first (the same
-// mechanism a real admin would use for "refresh now"), then checks the tab
-// actually renders it.
-test('admin sees the Monitoring tab with live data after a forced snapshot', async ({ page }) => {
+// Monitoring page (item 6, moved out of a tab on Admin > List Users into
+// its own route, /settings/monitoring — CLAUDE.md): resource usage +
+// persistent history. The collector's own 60s timer is too slow for a
+// deterministic e2e test, so this forces a snapshot via the admin-only POST
+// endpoint first (the same mechanism a real admin would use for "refresh
+// now"), then checks the page actually renders it.
+test('admin sees Monitoring at /settings/monitoring with live data after a forced snapshot', async ({ page }) => {
   await loginViaUi(page, 'admin@e2e.test', 'e2epass123')
 
   const snapshotResp = await page.request.post('/api/v1/admin/monitoring/snapshot-now')
@@ -14,8 +15,12 @@ test('admin sees the Monitoring tab with live data after a forced snapshot', asy
   const snapshot = await snapshotResp.json()
   expect(snapshot.backend_rss_mb).toBeGreaterThan(0)
 
-  await page.goto('/admin')
-  await page.getByRole('tab', { name: 'Monitoring' }).click()
+  // Reached via the Settings menu, not a direct goto — exercises the new
+  // menu entry (AppLayout.tsx's admin-only Security group), not just the
+  // route existing.
+  await page.getByTestId('user-menu-trigger').click()
+  await page.getByRole('menuitem', { name: 'Monitoring' }).click()
+  await expect(page).toHaveURL(/\/settings\/monitoring$/)
 
   // Stat cards — real values, not the loading placeholder ("…") or the
   // empty-state dash ("—"). "Backend memory" appears twice (stat card
@@ -37,12 +42,12 @@ test('admin sees the Monitoring tab with live data after a forced snapshot', asy
   // Range picker switches to a longer (hourly-resolution) window without
   // erroring — an empty history at that resolution is fine (fresh e2e
   // stack has no hour-old data yet), just checking the control works and
-  // the panel doesn't fall over.
+  // the page doesn't fall over.
   await page.getByText('7d', { exact: true }).click()
   await expect(page.getByText('Backend memory').first()).toBeVisible()
 })
 
-test('editor cannot reach the Monitoring tab (redirected away from /admin)', async ({ page }) => {
+test('editor cannot reach Monitoring (no menu entry, route redirects away)', async ({ page }) => {
   await loginViaUi(page, 'admin@e2e.test', 'e2epass123')
   const email = `editor_monitor_${Date.now()}@e2e.test`
   const createResp = await page.request.post('/api/v1/admin/users', {
@@ -55,7 +60,9 @@ test('editor cannot reach the Monitoring tab (redirected away from /admin)', asy
   await expect(page).toHaveURL(/\/login$/)
 
   await loginViaUi(page, email, 'e2epass123')
-  await page.goto('/admin')
+  await page.getByTestId('user-menu-trigger').click()
+  await expect(page.getByRole('menuitem', { name: 'Monitoring' })).not.toBeVisible()
+
+  await page.goto('/settings/monitoring')
   await expect(page).toHaveURL(/\/experiments$/)
-  await expect(page.getByText('Monitoring')).not.toBeVisible()
 })
