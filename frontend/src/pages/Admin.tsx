@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Table, Button, Modal, Form, Input, Select, Switch, message, Typography, Space, Tag } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { PlusOutlined, CheckSquareOutlined, CloseOutlined } from '@ant-design/icons'
 import { apiClient, errorMessage } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
@@ -31,6 +31,16 @@ export function AdminPage() {
   // "_dev_ prefix + self-cleanup" rule) shouldn't clutter the list by
   // default — opt in with "Show inactive" instead.
   const [showInactive, setShowInactive] = useState(false)
+
+  // Bulk select (item 7, audit-details+ package) — same Superset-style
+  // pattern as ExperimentsList.tsx/Datasets.tsx: a toggle reveals a
+  // checkbox column, selecting rows shows an action bar. Deactivate/
+  // Activate, not delete — matches this page's existing "prefer
+  // deactivating over deleting" philosophy (see the Active field's `extra`
+  // text in the Edit modal below).
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [bulkSaving, setBulkSaving] = useState(false)
 
   const { data: users, isLoading } = useQuery({
     queryKey: queryKeys.adminUsers(),
@@ -139,6 +149,50 @@ export function AdminPage() {
     })
   }
 
+  const exitBulkMode = () => {
+    setBulkMode(false)
+    setSelectedIds([])
+  }
+
+  const handleBulkSetActive = async (isActive: boolean) => {
+    setBulkSaving(true)
+    try {
+      const { data, error } = await apiClient.POST('/api/v1/admin/users/bulk-set-active', {
+        body: { user_ids: selectedIds, is_active: isActive },
+      })
+      if (error) throw new Error(errorMessage(error))
+      exitBulkMode()
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminUsers() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.usersPicker() })
+      const verb = isActive ? 'Activated' : 'Deactivated'
+      if (data.skipped.length === 0) {
+        message.success(`${verb} ${data.updated.length} user${data.updated.length === 1 ? '' : 's'}`)
+      } else {
+        Modal.info({
+          title: 'Bulk update finished',
+          content: (
+            <div>
+              <p>
+                {verb} {data.updated.length}, skipped {data.skipped.length}:
+              </p>
+              <ul>
+                {data.skipped.map((s) => (
+                  <li key={s.user_id}>
+                    {users?.find((u) => u.id === s.user_id)?.email ?? s.user_id} — {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ),
+        })
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Failed to update')
+    } finally {
+      setBulkSaving(false)
+    }
+  }
+
   const usersTab = (
     <div>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
@@ -148,16 +202,45 @@ export function AdminPage() {
         <Space>
           <Switch checked={showInactive} onChange={setShowInactive} aria-label="Show inactive" />
           <Typography.Text>Show inactive</Typography.Text>
+          <Button
+            icon={bulkMode ? <CloseOutlined /> : <CheckSquareOutlined />}
+            onClick={() => (bulkMode ? exitBulkMode() : setBulkMode(true))}
+          >
+            {bulkMode ? 'Cancel' : 'Bulk select'}
+          </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             Create User
           </Button>
         </Space>
       </Space>
 
+      {bulkMode && selectedIds.length > 0 && (
+        <Space style={{ marginBottom: 12, padding: '8px 12px', background: '#F0F5F3', borderRadius: 6 }}>
+          <span>{selectedIds.length} selected</span>
+          <Button size="small" loading={bulkSaving} onClick={() => handleBulkSetActive(false)}>
+            Deactivate
+          </Button>
+          <Button size="small" loading={bulkSaving} onClick={() => handleBulkSetActive(true)}>
+            Activate
+          </Button>
+          <Button size="small" onClick={exitBulkMode}>
+            Deselect all
+          </Button>
+        </Space>
+      )}
+
       <Table
         rowKey="id"
         loading={isLoading}
         dataSource={(users ?? []).filter((u) => showInactive || u.is_active)}
+        rowSelection={
+          bulkMode
+            ? {
+                selectedRowKeys: selectedIds,
+                onChange: (keys) => setSelectedIds(keys as string[]),
+              }
+            : undefined
+        }
         columns={[
           { title: 'Email', dataIndex: 'email' },
           { title: 'First Name', dataIndex: 'first_name' },

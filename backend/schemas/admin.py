@@ -42,6 +42,21 @@ class ResetPasswordResponse(BaseModel):
     new_password: str
 
 
+class BulkSetActiveRequest(BaseModel):
+    user_ids: list[str]
+    is_active: bool
+
+
+class BulkSetActiveSkipped(BaseModel):
+    user_id: str
+    reason: str
+
+
+class BulkSetActiveResult(BaseModel):
+    updated: list[str]
+    skipped: list[BulkSetActiveSkipped]
+
+
 class MonitoringTableSize(BaseModel):
     table_name: str
     size_bytes: int

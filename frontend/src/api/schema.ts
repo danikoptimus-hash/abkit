@@ -1096,6 +1096,30 @@ export interface paths {
         patch: operations["patch_user_api_v1_admin_users__user_id__patch"];
         trace?: never;
     };
+    "/api/v1/admin/users/bulk-set-active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Set Active
+         * @description Bulk select + Deactivate/Activate (item 7, audit-details+ package) —
+         *     mirrors bulk_delete_experiments's shape. Self-protection (can't
+         *     deactivate yourself or the last active admin) is enforced in
+         *     abkit.auth.service.admin_bulk_set_active and reported back as a skip,
+         *     not an error that fails the whole batch.
+         */
+        post: operations["bulk_set_active_api_v1_admin_users_bulk_set_active_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users/{user_id}/reset-password": {
         parameters: {
             query?: never;
@@ -1677,6 +1701,27 @@ export interface components {
         BulkMoveFolderSkipped: {
             /** Name */
             name: string;
+            /** Reason */
+            reason: string;
+        };
+        /** BulkSetActiveRequest */
+        BulkSetActiveRequest: {
+            /** User Ids */
+            user_ids: string[];
+            /** Is Active */
+            is_active: boolean;
+        };
+        /** BulkSetActiveResult */
+        BulkSetActiveResult: {
+            /** Updated */
+            updated: string[];
+            /** Skipped */
+            skipped: components["schemas"]["BulkSetActiveSkipped"][];
+        };
+        /** BulkSetActiveSkipped */
+        BulkSetActiveSkipped: {
+            /** User Id */
+            user_id: string;
             /** Reason */
             reason: string;
         };
@@ -5133,6 +5178,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserAdminOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_set_active_api_v1_admin_users_bulk_set_active_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkSetActiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkSetActiveResult"];
                 };
             };
             /** @description Validation Error */

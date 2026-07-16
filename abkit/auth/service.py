@@ -218,6 +218,45 @@ def admin_set_active(acting_user: CurrentUser, *, target_email: str, is_active: 
     )
 
 
+def admin_bulk_set_active(
+    acting_user: CurrentUser, *, user_ids: list[str], is_active: bool
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Bulk Deactivate/Activate on Admin > Users (item 7, audit-details+
+    package) — same pattern as bulk-delete/bulk-move-folder: loops the
+    single-user path (admin_set_active) so each change gets its own
+    audit_log entry, per-item skip instead of failing the whole batch.
+    Self-protection only applies when DEACTIVATING (is_active=False) — never
+    an issue when activating: can't deactivate your own account, and can't
+    deactivate the last currently-active admin (nobody left to manage
+    users). active_admin_count is decremented as the batch proceeds, so
+    selecting several admins at once still stops at the last one, not just
+    a stale snapshot check repeated per-item."""
+    require_admin(acting_user)
+
+    all_users = {str(u.id): u for u in UserRepo().list_all()}
+    active_admin_count = sum(1 for u in all_users.values() if u.role == "admin" and u.is_active)
+
+    updated: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for user_id in user_ids:
+        target = all_users.get(user_id)
+        if target is None:
+            skipped.append((user_id, "not found"))
+            continue
+        if not is_active:
+            if str(target.id) == str(acting_user.id):
+                skipped.append((user_id, "cannot deactivate your own account"))
+                continue
+            if target.role == "admin" and target.is_active and active_admin_count <= 1:
+                skipped.append((user_id, "cannot deactivate the last active admin"))
+                continue
+            if target.role == "admin" and target.is_active:
+                active_admin_count -= 1
+        admin_set_active(acting_user, target_email=target.email, is_active=is_active)
+        updated.append(user_id)
+    return updated, skipped
+
+
 def admin_update_name(
     acting_user: CurrentUser, *, target_email: str, first_name: str, last_name: str
 ) -> None:

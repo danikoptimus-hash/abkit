@@ -20,6 +20,9 @@ from abkit.monitoring import MonitoringCollector
 from backend.deps import get_monitoring_collector, require_min_role
 from backend.errors import APIError
 from backend.schemas.admin import (
+    BulkSetActiveRequest,
+    BulkSetActiveResult,
+    BulkSetActiveSkipped,
     CreateUserRequest,
     CreateUserResponse,
     MonitoringCurrentOut,
@@ -97,6 +100,24 @@ def patch_user(
     if body.is_active is not None:
         admin_set_active(user, target_email=target.email, is_active=body.is_active)
     return _to_out(UserRepo().get_by_id(target.id))
+
+
+@router.post("/users/bulk-set-active", response_model=BulkSetActiveResult)
+def bulk_set_active(
+    body: BulkSetActiveRequest, user: CurrentUser = Depends(require_min_role("admin")),
+) -> BulkSetActiveResult:
+    """Bulk select + Deactivate/Activate (item 7, audit-details+ package) —
+    mirrors bulk_delete_experiments's shape. Self-protection (can't
+    deactivate yourself or the last active admin) is enforced in
+    abkit.auth.service.admin_bulk_set_active and reported back as a skip,
+    not an error that fails the whole batch."""
+    from abkit.auth.service import admin_bulk_set_active
+
+    updated, skipped = admin_bulk_set_active(user, user_ids=body.user_ids, is_active=body.is_active)
+    return BulkSetActiveResult(
+        updated=updated,
+        skipped=[BulkSetActiveSkipped(user_id=uid, reason=reason) for uid, reason in skipped],
+    )
 
 
 @router.post("/users/{user_id}/reset-password", response_model=ResetPasswordResponse)
