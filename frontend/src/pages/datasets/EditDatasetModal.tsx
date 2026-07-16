@@ -10,6 +10,7 @@ import { SchemaTableCascade } from '../../components/datasets/SchemaTableCascade
 import { QueryResultPreview } from '../../components/datasets/QueryResultPreview'
 import { DatasetSnapshotPreview } from '../../components/datasets/DatasetSnapshotPreview'
 import { buildSelectAllSql, parseSchemaTableFromSql } from '../../components/datasets/parseSchemaTableFromSql'
+import { StopClickPropagation } from '../../components/StopClickPropagation'
 
 type DatasetOut = components['schemas']['DatasetOut']
 
@@ -199,6 +200,7 @@ export function EditDatasetModal({
       width={isSql ? 640 : 480}
       destroyOnHidden
     >
+      <StopClickPropagation>
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
         Name
       </Typography.Text>
@@ -291,6 +293,7 @@ export function EditDatasetModal({
         </Button>
         <Button onClick={guardedClose}>Cancel</Button>
       </Space>
+      </StopClickPropagation>
     </Modal>
   )
 }

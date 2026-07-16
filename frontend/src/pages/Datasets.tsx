@@ -11,6 +11,7 @@ import { apiClient, errorMessage } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { RelativeTime } from '../components/RelativeTime'
 import { SourceTag } from '../components/DatasetSelect'
+import { StopClickPropagation } from '../components/StopClickPropagation'
 import { CreateDatasetModal } from './datasets/CreateDatasetModal'
 import { EditDatasetModal } from './datasets/EditDatasetModal'
 import { BulkDeleteDatasetsModal } from '../components/datasets/BulkDeleteDatasetsModal'
@@ -190,14 +191,16 @@ function DeleteDatasetAction({ dataset, onDeleted }: { dataset: DatasetOut; onDe
         okButtonProps={{ danger: true, disabled: typedConfirm !== 'DELETE', loading: deleting }}
         destroyOnHidden
       >
-        {confirmModal && confirmModal.experiments.length > 0 && (
-          <Typography.Paragraph>
-            Used by experiments: <strong>{confirmModal.experiments.join(', ')}</strong>. Deleting this dataset
-            will not affect their existing analysis results, but their data source will show as deleted.
-          </Typography.Paragraph>
-        )}
-        <Typography.Paragraph>This cannot be undone. Type <Typography.Text code>DELETE</Typography.Text> to confirm.</Typography.Paragraph>
-        <Input value={typedConfirm} onChange={(e) => setTypedConfirm(e.target.value)} placeholder="DELETE" />
+        <StopClickPropagation>
+          {confirmModal && confirmModal.experiments.length > 0 && (
+            <Typography.Paragraph>
+              Used by experiments: <strong>{confirmModal.experiments.join(', ')}</strong>. Deleting this dataset
+              will not affect their existing analysis results, but their data source will show as deleted.
+            </Typography.Paragraph>
+          )}
+          <Typography.Paragraph>This cannot be undone. Type <Typography.Text code>DELETE</Typography.Text> to confirm.</Typography.Paragraph>
+          <Input value={typedConfirm} onChange={(e) => setTypedConfirm(e.target.value)} placeholder="DELETE" />
+        </StopClickPropagation>
       </Modal>
     </>
   )

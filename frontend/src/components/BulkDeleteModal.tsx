@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Typography, Form, Input, List } from 'antd'
 import { apiClient, errorMessage } from '../api/client'
+import { StopClickPropagation } from './StopClickPropagation'
 
 export interface BulkDeleteResult {
   deleted: string[]
@@ -54,27 +55,29 @@ export function BulkDeleteModal({ names, onCancel, onDone }: Props) {
       okText="Delete"
       destroyOnHidden
     >
-      {error && (
+      <StopClickPropagation>
+        {error && (
+          <Typography.Paragraph type="danger">
+            {error}
+          </Typography.Paragraph>
+        )}
         <Typography.Paragraph type="danger">
-          {error}
+          This will permanently delete {names?.length ?? 0} experiments including all their assignments, datasets
+          and analysis results. This action cannot be undone.
         </Typography.Paragraph>
-      )}
-      <Typography.Paragraph type="danger">
-        This will permanently delete {names?.length ?? 0} experiments including all their assignments, datasets
-        and analysis results. This action cannot be undone.
-      </Typography.Paragraph>
-      <List
-        size="small"
-        bordered
-        dataSource={names ?? []}
-        renderItem={(name) => <List.Item>{name}</List.Item>}
-        style={{ maxHeight: 200, overflow: 'auto', marginBottom: 16 }}
-      />
-      <Form layout="vertical">
-        <Form.Item label='Type "DELETE" to confirm'>
-          <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
-        </Form.Item>
-      </Form>
+        <List
+          size="small"
+          bordered
+          dataSource={names ?? []}
+          renderItem={(name) => <List.Item>{name}</List.Item>}
+          style={{ maxHeight: 200, overflow: 'auto', marginBottom: 16 }}
+        />
+        <Form layout="vertical">
+          <Form.Item label='Type "DELETE" to confirm'>
+            <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
+          </Form.Item>
+        </Form>
+      </StopClickPropagation>
     </Modal>
   )
 }

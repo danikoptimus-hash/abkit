@@ -3,6 +3,7 @@ import { Modal, Typography, Form, Input, List, Alert, Spin } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
+import { StopClickPropagation } from '../StopClickPropagation'
 import type { components } from '../../api/schema'
 
 type DatasetOut = components['schemas']['DatasetOut']
@@ -81,55 +82,57 @@ export function BulkDeleteDatasetsModal({ datasets, onCancel, onDone }: Props) {
       okText="Delete"
       destroyOnHidden
     >
-      {error && <Typography.Paragraph type="danger">{error}</Typography.Paragraph>}
-      <Typography.Paragraph type="danger">
-        This will permanently delete {datasets?.length ?? 0} datasets. This action cannot be undone.
-        {usedCount > 0 && (
-          <>
-            {' '}
-            {usedCount} of them {usedCount === 1 ? 'is' : 'are'} used by experiments — their existing analysis
-            results are unaffected, but the data source will show as deleted.
-          </>
+      <StopClickPropagation>
+        {error && <Typography.Paragraph type="danger">{error}</Typography.Paragraph>}
+        <Typography.Paragraph type="danger">
+          This will permanently delete {datasets?.length ?? 0} datasets. This action cannot be undone.
+          {usedCount > 0 && (
+            <>
+              {' '}
+              {usedCount} of them {usedCount === 1 ? 'is' : 'are'} used by experiments — their existing analysis
+              results are unaffected, but the data source will show as deleted.
+            </>
+          )}
+        </Typography.Paragraph>
+        {usageLoading ? (
+          <Spin size="small" />
+        ) : (
+          <List
+            size="small"
+            bordered
+            dataSource={datasets ?? []}
+            renderItem={(ds) => {
+              const usedBy = usageById[ds.id] ?? []
+              return (
+                <List.Item>
+                  <div>
+                    <div>{ds.filename}</div>
+                    {usedBy.length > 0 && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        used by: {usedBy.join(', ')}
+                      </Typography.Text>
+                    )}
+                  </div>
+                </List.Item>
+              )
+            }}
+            style={{ maxHeight: 240, overflow: 'auto', marginBottom: 16 }}
+          />
         )}
-      </Typography.Paragraph>
-      {usageLoading ? (
-        <Spin size="small" />
-      ) : (
-        <List
-          size="small"
-          bordered
-          dataSource={datasets ?? []}
-          renderItem={(ds) => {
-            const usedBy = usageById[ds.id] ?? []
-            return (
-              <List.Item>
-                <div>
-                  <div>{ds.filename}</div>
-                  {usedBy.length > 0 && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      used by: {usedBy.join(', ')}
-                    </Typography.Text>
-                  )}
-                </div>
-              </List.Item>
-            )
-          }}
-          style={{ maxHeight: 240, overflow: 'auto', marginBottom: 16 }}
-        />
-      )}
-      {usedCount > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message={`${usedCount} dataset${usedCount === 1 ? '' : 's'} in use — deleting anyway is allowed but not reversible.`}
-        />
-      )}
-      <Form layout="vertical">
-        <Form.Item label='Type "DELETE" to confirm'>
-          <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
-        </Form.Item>
-      </Form>
+        {usedCount > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`${usedCount} dataset${usedCount === 1 ? '' : 's'} in use — deleting anyway is allowed but not reversible.`}
+          />
+        )}
+        <Form layout="vertical">
+          <Form.Item label='Type "DELETE" to confirm'>
+            <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
+          </Form.Item>
+        </Form>
+      </StopClickPropagation>
     </Modal>
   )
 }

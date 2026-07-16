@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Typography, Form, Input, List, Alert } from 'antd'
 import { apiClient, errorMessage } from '../../api/client'
+import { StopClickPropagation } from '../StopClickPropagation'
 import type { components } from '../../api/schema'
 
 type TagAdminOut = components['schemas']['TagAdminOut']
@@ -59,48 +60,50 @@ export function BulkDeleteTagsModal({ tags, onCancel, onDone }: Props) {
       okText="Delete"
       destroyOnHidden
     >
-      {error && <Typography.Paragraph type="danger">{error}</Typography.Paragraph>}
-      <Typography.Paragraph type="danger">
-        This will permanently delete {tags?.length ?? 0} tags. This action cannot be undone.
-        {usedCount > 0 && (
-          <>
-            {' '}
-            {usedCount} of them {usedCount === 1 ? 'is' : 'are'} used by experiments — they will be removed from
-            those experiments.
-          </>
-        )}
-      </Typography.Paragraph>
-      <List
-        size="small"
-        bordered
-        dataSource={tags ?? []}
-        renderItem={(t) => (
-          <List.Item>
-            <div>
-              <div>{t.name}</div>
-              {t.experiment_count > 0 && (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  used by {t.experiment_count} experiment{t.experiment_count === 1 ? '' : 's'}
-                </Typography.Text>
-              )}
-            </div>
-          </List.Item>
-        )}
-        style={{ maxHeight: 240, overflow: 'auto', marginBottom: 16 }}
-      />
-      {usedCount > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message={`${usedCount} tag${usedCount === 1 ? '' : 's'} in use — deleting anyway is allowed but not reversible.`}
+      <StopClickPropagation>
+        {error && <Typography.Paragraph type="danger">{error}</Typography.Paragraph>}
+        <Typography.Paragraph type="danger">
+          This will permanently delete {tags?.length ?? 0} tags. This action cannot be undone.
+          {usedCount > 0 && (
+            <>
+              {' '}
+              {usedCount} of them {usedCount === 1 ? 'is' : 'are'} used by experiments — they will be removed from
+              those experiments.
+            </>
+          )}
+        </Typography.Paragraph>
+        <List
+          size="small"
+          bordered
+          dataSource={tags ?? []}
+          renderItem={(t) => (
+            <List.Item>
+              <div>
+                <div>{t.name}</div>
+                {t.experiment_count > 0 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    used by {t.experiment_count} experiment{t.experiment_count === 1 ? '' : 's'}
+                  </Typography.Text>
+                )}
+              </div>
+            </List.Item>
+          )}
+          style={{ maxHeight: 240, overflow: 'auto', marginBottom: 16 }}
         />
-      )}
-      <Form layout="vertical">
-        <Form.Item label='Type "DELETE" to confirm'>
-          <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
-        </Form.Item>
-      </Form>
+        {usedCount > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`${usedCount} tag${usedCount === 1 ? '' : 's'} in use — deleting anyway is allowed but not reversible.`}
+          />
+        )}
+        <Form layout="vertical">
+          <Form.Item label='Type "DELETE" to confirm'>
+            <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
+          </Form.Item>
+        </Form>
+      </StopClickPropagation>
     </Modal>
   )
 }

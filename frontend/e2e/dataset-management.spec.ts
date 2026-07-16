@@ -67,6 +67,39 @@ test('Delete an unused dataset requires typed DELETE; canceling does not delete 
   await expect(page.getByRole('row', { name: new RegExp(filename) })).not.toBeVisible()
 })
 
+test('Clicking into the DELETE-confirmation input does not open the row preview drawer', async ({ page, request }) => {
+  // Item 3 regression: the row has onRow -> opens the preview Drawer on
+  // click. The Delete modal renders inline inside that row's column (React
+  // portal — bubbles through the React tree, not the DOM tree), so a click
+  // landing on the "type DELETE" input used to bubble up to the row and pop
+  // the drawer open underneath the modal, stealing focus mid-type.
+  const filename = `delete_click_bubble_${Date.now()}.csv`
+  await uploadDataset(request, 'a,b\n1,2\n', filename)
+  await loginViaUi(page)
+  await page.goto('/datasets')
+
+  const row = page.getByRole('row', { name: new RegExp(filename) })
+  await row.hover()
+  await row.getByRole('button', { name: 'Delete' }).click()
+
+  const confirmDialog = page.getByRole('dialog').filter({ hasText: `Delete dataset ${filename}?` })
+  await expect(confirmDialog).toBeVisible()
+
+  const input = confirmDialog.getByPlaceholder('DELETE')
+  await input.click()
+  await input.type('DELETE')
+
+  await expect(confirmDialog).toBeVisible()
+  await expect(input).toBeFocused()
+  await expect(input).toHaveValue('DELETE')
+  // The preview Drawer would be titled with the dataset's own filename
+  // (Datasets.tsx: `title={preview?.filename ?? 'Preview'}`) — assert the
+  // only open dialog is the delete confirmation, not a second one behind it.
+  await expect(page.getByRole('dialog')).toHaveCount(1)
+
+  await confirmDialog.getByRole('button', { name: 'Cancel' }).click()
+})
+
 test('Delete a dataset used by an experiment requires typed DELETE and lists the experiment', async ({
   page,
   request,

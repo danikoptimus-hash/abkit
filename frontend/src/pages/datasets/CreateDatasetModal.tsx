@@ -10,6 +10,7 @@ import { useUnsavedGuard } from '../../hooks/useUnsavedGuard'
 import { SchemaTableCascade } from '../../components/datasets/SchemaTableCascade'
 import { QueryResultPreview } from '../../components/datasets/QueryResultPreview'
 import { buildSelectAllSql } from '../../components/datasets/parseSchemaTableFromSql'
+import { StopClickPropagation } from '../../components/StopClickPropagation'
 
 const { Dragger } = Upload
 const { TextArea } = Input
@@ -390,12 +391,14 @@ export function CreateDatasetModal({ open, onClose }: { open: boolean; onClose: 
 
   return (
     <Modal title="New dataset" open={open} onCancel={guardedClose} footer={null} width={640} destroyOnHidden>
-      <Tabs
-        items={[
-          { key: 'upload', label: 'Upload file', children: <UploadTab onDone={handleDone} /> },
-          { key: 'sql', label: 'From SQL', children: <FromSqlTab onDone={handleDone} onDirtyChange={setSqlTabDirty} /> },
-        ]}
-      />
+      <StopClickPropagation>
+        <Tabs
+          items={[
+            { key: 'upload', label: 'Upload file', children: <UploadTab onDone={handleDone} /> },
+            { key: 'sql', label: 'From SQL', children: <FromSqlTab onDone={handleDone} onDirtyChange={setSqlTabDirty} /> },
+          ]}
+        />
+      </StopClickPropagation>
     </Modal>
   )
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Modal, Typography, Form, Input, Spin } from 'antd'
 import { apiClient, errorMessage } from '../api/client'
+import { StopClickPropagation } from './StopClickPropagation'
 
 interface Props {
   name: string | null
@@ -58,25 +59,27 @@ export function DeleteExperimentModal({ name, onCancel, onDeleted }: Props) {
       okButtonProps={{ danger: true, disabled: confirmText !== 'DELETE', loading: deleting }}
       okText="Delete"
     >
-      {error && (
-        <Typography.Paragraph type="danger">
-          {error}
-        </Typography.Paragraph>
-      )}
-      {summary ? (
-        <Typography.Paragraph type="danger">
-          You are deleting experiment {name}, including its assignments ({summary.assignments} rows) and
-          analysis results ({summary.results}). Linked datasets ({summary.datasets}) will NOT be deleted — they
-          remain on the Datasets page. This action cannot be undone.
-        </Typography.Paragraph>
-      ) : (
-        <Spin size="small" />
-      )}
-      <Form layout="vertical">
-        <Form.Item label='Type "DELETE" to confirm'>
-          <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
-        </Form.Item>
-      </Form>
+      <StopClickPropagation>
+        {error && (
+          <Typography.Paragraph type="danger">
+            {error}
+          </Typography.Paragraph>
+        )}
+        {summary ? (
+          <Typography.Paragraph type="danger">
+            You are deleting experiment {name}, including its assignments ({summary.assignments} rows) and
+            analysis results ({summary.results}). Linked datasets ({summary.datasets}) will NOT be deleted — they
+            remain on the Datasets page. This action cannot be undone.
+          </Typography.Paragraph>
+        ) : (
+          <Spin size="small" />
+        )}
+        <Form layout="vertical">
+          <Form.Item label='Type "DELETE" to confirm'>
+            <Input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} autoFocus />
+          </Form.Item>
+        </Form>
+      </StopClickPropagation>
     </Modal>
   )
 }

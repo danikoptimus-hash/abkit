@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiClient, errorMessage } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard'
+import { StopClickPropagation } from './StopClickPropagation'
 
 interface Props {
   name: string | null
@@ -194,6 +195,7 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
       confirmLoading={saving}
       destroyOnHidden
     >
+      <StopClickPropagation>
       {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
       {isLoading || !properties ? (
         <Spin size="small" />
@@ -246,6 +248,7 @@ export function ExperimentPropertiesModal({ name, onCancel, onSaved }: Props) {
           </Form.Item>
         </Form>
       )}
+      </StopClickPropagation>
     </Modal>
   )
 }
