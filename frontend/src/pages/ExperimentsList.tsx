@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Table, Input, Select, Button, Tag, Space, message, Tooltip, Modal } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, CheckSquareOutlined, CloseOutlined } from '@ant-design/icons'
+import { Table, Input, Select, Button, Tag, Space, message, Tooltip, Modal, Typography } from 'antd'
+import {
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  CheckSquareOutlined,
+  CloseOutlined,
+  FolderOutlined,
+} from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
 import { queryKeys } from '../api/queryKeys'
@@ -15,6 +22,8 @@ import { RelativeTime } from '../components/RelativeTime'
 import { TagList } from '../components/TagBadge'
 import type { TagLike } from '../components/TagBadge'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import { FolderPanel } from '../components/folders/FolderPanel'
+import { MoveToFolderModal } from '../components/folders/MoveToFolderModal'
 
 const STATUS_COLORS: Record<string, string> = {
   designed: 'default',
@@ -35,14 +44,15 @@ export function ExperimentsListPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  // Initial tag filter can arrive via URL (?tag=<id>, repeatable) — how a
-  // tag badge click on the experiment page (a different route) hands off
-  // "filter the list by this tag" (UX package, Tags §3.5).
+  // Initial tag/folder filter can arrive via URL (?tag=<id>, ?folder=<id>)
+  // — how a tag badge / folder click on a different route hands off "filter
+  // the list by this" (UX package, Tags §3.5; item 5 for folder).
   const [searchParams] = useSearchParams()
   const [q, setQ] = useState('')
   const debouncedQ = useDebouncedValue(q, 300)
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [tagIds, setTagIds] = useState<string[]>(() => searchParams.getAll('tag'))
+  const [folderFilter, setFolderFilter] = useState<string | undefined>(() => searchParams.get('folder') ?? undefined)
   const [page, setPage] = useState(1)
   const pageSize = 20
 
@@ -50,15 +60,16 @@ export function ExperimentsListPage() {
   // same rule Datasets.tsx follows for its own live search.
   useEffect(() => {
     setPage(1)
-  }, [debouncedQ, status, tagIds])
+  }, [debouncedQ, status, tagIds, folderFilter])
 
   const { data, isLoading } = useQuery({
-    queryKey: queryKeys.experiments({ q: debouncedQ, status, tagIds, page }),
+    queryKey: queryKeys.experiments({ q: debouncedQ, status, tagIds, folderFilter, page }),
     queryFn: async () => {
       const { data, error } = await apiClient.GET('/api/v1/experiments', {
         params: {
           query: {
-            q: debouncedQ || undefined, status, tag: tagIds.length > 0 ? tagIds : undefined, page, page_size: pageSize,
+            q: debouncedQ || undefined, status, tag: tagIds.length > 0 ? tagIds : undefined,
+            folder: folderFilter, page, page_size: pageSize,
           },
         },
       })
@@ -89,6 +100,7 @@ export function ExperimentsListPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [editTarget, setEditTarget] = useState<string | null>(null)
+  const [moveTarget, setMoveTarget] = useState<string[] | null>(null)
   const canCreate = hasMinRole(user, 'editor')
 
   // Bulk select (UX package, list п.E) — Superset-style: a toggle reveals a
@@ -97,7 +109,12 @@ export function ExperimentsListPage() {
   const [selectedNames, setSelectedNames] = useState<string[]>([])
   const [bulkDeleteTarget, setBulkDeleteTarget] = useState<string[] | null>(null)
 
-  const refreshList = () => queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
+  const refreshList = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.experimentsAll() })
+    // Item 5 (folders package) — a move changes per-folder counts shown in
+    // the FolderPanel, not just the table rows.
+    queryClient.invalidateQueries({ queryKey: queryKeys.folders() })
+  }
 
   const exitBulkMode = () => {
     setBulkMode(false)
@@ -129,6 +146,13 @@ export function ExperimentsListPage() {
   // can join this array later without restructuring the action bar.
   const bulkActions = [
     {
+      key: 'move',
+      label: 'Move to folder',
+      ariaLabel: 'Move selected to folder',
+      icon: <FolderOutlined />,
+      onClick: () => setMoveTarget(selectedNames),
+    },
+    {
       key: 'delete',
       label: 'Delete',
       ariaLabel: 'Delete selected',
@@ -139,7 +163,9 @@ export function ExperimentsListPage() {
   ]
 
   return (
-    <div>
+    <div style={{ display: 'flex' }}>
+      <FolderPanel selected={folderFilter} onSelect={setFolderFilter} />
+      <div style={{ flex: 1, minWidth: 0 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
           <Input
@@ -266,6 +292,21 @@ export function ExperimentsListPage() {
             render: (_, record) => <TagList tags={record.tags} onTagClick={filterByTag} />,
           },
           {
+            title: 'Folder',
+            key: 'folder',
+            render: (_, record) =>
+              record.folder_name ? (
+                <Tag
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setFolderFilter(record.folder_id ?? undefined)}
+                >
+                  {record.folder_name}
+                </Tag>
+              ) : (
+                <Typography.Text type="secondary">—</Typography.Text>
+              ),
+          },
+          {
             title: 'Last Modified',
             key: 'updated',
             render: (_, record) => (
@@ -286,6 +327,14 @@ export function ExperimentsListPage() {
                       aria-label="Edit"
                       icon={<EditOutlined />}
                       onClick={() => setEditTarget(record.name)}
+                    />
+                  </Tooltip>
+                  <Tooltip title="Move to folder">
+                    <Button
+                      size="small"
+                      aria-label="Move to folder"
+                      icon={<FolderOutlined />}
+                      onClick={() => setMoveTarget([record.name])}
                     />
                   </Tooltip>
                   <Tooltip title="Delete">
@@ -328,6 +377,18 @@ export function ExperimentsListPage() {
         onCancel={() => setBulkDeleteTarget(null)}
         onDone={handleBulkDeleteDone}
       />
+
+      <MoveToFolderModal
+        names={moveTarget}
+        onCancel={() => setMoveTarget(null)}
+        onDone={() => {
+          const moved = moveTarget
+          setMoveTarget(null)
+          if (moved && moved.length > 1) exitBulkMode()
+          refreshList()
+        }}
+      />
+      </div>
     </div>
   )
 }

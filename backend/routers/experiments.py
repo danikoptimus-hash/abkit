@@ -54,6 +54,12 @@ from backend.schemas.experiments import (
     UserBrief,
     ValidateRequest,
 )
+from backend.schemas.folders import (
+    BulkMoveFolderRequest,
+    BulkMoveFolderResult,
+    BulkMoveFolderSkipped,
+    SetExperimentFolderRequest,
+)
 from backend.schemas.tags import SetExperimentTagsRequest, TagOut
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -118,12 +124,15 @@ def list_experiments(
     pub: str | None = None,
     q: str | None = None,
     tag: list[str] | None = Query(default=None, description="Tag id(s) — AND logic across multiple"),
+    folder: str | None = Query(
+        default=None, description="Folder id, or the literal 'none' for Uncategorized (folder_id IS NULL)"
+    ),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     user: CurrentUser = Depends(get_current_user),
 ) -> PaginatedExperiments:
     from abkit.access import can_view_experiment, is_owner_or_granted
-    from abkit.db.repositories import ExperimentAccessRepo, ExperimentTagRepo
+    from abkit.db.repositories import ExperimentAccessRepo, ExperimentTagRepo, FolderRepo
 
     # Резолвим владельца одним проходом по users вместо N+1 запроса на
     # эксперимент (FRONTEND.md §3.2: список фильтруется по owner, плюс avatar
@@ -164,10 +173,20 @@ def list_experiments(
             e for e in all_exps
             if wanted_tag_ids.issubset({t.id for t in tags_by_exp_all.get(e.id, [])})
         ]
+    if folder:
+        # Item 5 (folders package) — composes with every other filter above,
+        # same AND-together pattern as status/tag/q. 'none' means
+        # Uncategorized (folder_id IS NULL), any other value is a folder id.
+        if folder == "none":
+            all_exps = [e for e in all_exps if e.folder_id is None]
+        else:
+            wanted_folder_id = uuid_mod.UUID(folder)
+            all_exps = [e for e in all_exps if e.folder_id == wanted_folder_id]
     total = len(all_exps)
     start = (page - 1) * page_size
     page_items = all_exps[start : start + page_size]
     tags_by_exp = ExperimentTagRepo().list_for_experiments([e.id for e in page_items])
+    folder_by_id = {f.id: f for f in FolderRepo().list_all()}
     items = [
         ExperimentSummary(
             name=e.name, status=e.status, publication_status=e.publication_status,
@@ -179,6 +198,8 @@ def list_experiments(
             created_at=e.created_at, started_at=e.started_at,
             completed_at=e.completed_at, archived_at=e.archived_at,
             tags=[_to_tag_out(t) for t in tags_by_exp.get(e.id, [])],
+            folder_id=str(e.folder_id) if e.folder_id else None,
+            folder_name=getattr(folder_by_id.get(e.folder_id), "name", None),
         )
         for e in page_items
     ]
@@ -248,10 +269,11 @@ def _get_last_modified(exp) -> tuple:
 @router.get("/{name}", response_model=ExperimentDetail)
 def get_experiment(name: str, user: CurrentUser = Depends(get_current_user)) -> ExperimentDetail:
     from abkit.access import is_owner_or_granted
-    from abkit.db.repositories import ExperimentTagRepo
+    from abkit.db.repositories import ExperimentTagRepo, FolderRepo
 
     exp = _visible_or_404(_get_experiment_or_404(name), user)
     owner = UserRepo().get_by_id(exp.owner_id)
+    folder = FolderRepo().get_by_id(exp.folder_id) if exp.folder_id else None
     path = _artifact_dir(name)
     available_reports = [r for r in REPORT_FILENAMES if (path / r).exists()]
     files = (
@@ -281,6 +303,8 @@ def get_experiment(name: str, user: CurrentUser = Depends(get_current_user)) -> 
         completed_at=exp.completed_at, archived_at=exp.archived_at,
         available_reports=available_reports, files=files,
         tags=[_to_tag_out(t) for t in ExperimentTagRepo().list_for_experiment(exp.id)],
+        folder_id=str(exp.folder_id) if exp.folder_id else None,
+        folder_name=folder.name if folder else None,
     )
 
 
@@ -296,6 +320,45 @@ def put_experiment_tags(
 
     tags = run_set_experiment_tags(user, name, body.tag_ids)
     return [_to_tag_out(t) for t in tags]
+
+
+@router.put("/{name}/folder")
+def put_experiment_folder(
+    name: str, body: SetExperimentFolderRequest, user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Row action "Move to folder" (item 5, folders package) — same
+    edit-access gate as tags/blocks/rename (owner/access-editor/Admin,
+    enforced in abkit/jobs.py::run_move_experiment_to_folder). folder_id
+    null files it back under Uncategorized."""
+    from abkit.jobs import run_move_experiment_to_folder
+
+    return run_move_experiment_to_folder(user, name, body.folder_id)
+
+
+@router.post("/bulk-move-folder", response_model=BulkMoveFolderResult)
+def bulk_move_folder(
+    body: BulkMoveFolderRequest, user: CurrentUser = Depends(require_min_role("editor")),
+) -> BulkMoveFolderResult:
+    """Bulk select + "Move to folder" (item 5, folders package) — mirrors
+    bulk_delete_experiments's shape: permission is checked PER experiment
+    (owner/access-editor/Admin), rows the user can't edit are skipped, not
+    silently dropped."""
+    from abkit.auth.guards import AuthError
+    from abkit.jobs import run_move_experiment_to_folder
+
+    moved: list[str] = []
+    skipped: list[BulkMoveFolderSkipped] = []
+    for name in body.names:
+        exp = ExperimentRepo().get_by_name(name)
+        if exp is None:
+            skipped.append(BulkMoveFolderSkipped(name=name, reason="not found"))
+            continue
+        try:
+            run_move_experiment_to_folder(user, name, body.folder_id)
+            moved.append(name)
+        except AuthError:
+            skipped.append(BulkMoveFolderSkipped(name=name, reason="no permission"))
+    return BulkMoveFolderResult(moved=moved, skipped=skipped)
 
 
 @router.get("/{name}/reports/{report_name}")

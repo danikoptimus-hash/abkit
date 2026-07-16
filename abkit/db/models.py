@@ -90,6 +90,40 @@ class Experiment(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Folders (item 5, folders package) — null means "Uncategorized", not "no
+    # opinion yet"; ON DELETE SET NULL (migration 0017) so deleting a folder
+    # never touches the experiments in it, same non-destructive pattern as
+    # datasets.experiment_id.
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class Folder(Base):
+    """Folders for A/B tests (item 5, folders package) — one level deep by
+    design: no subfolders in v1, just a flat named bucket that
+    Experiment.folder_id points into. Superset itself has no native folder
+    concept for dashboards (only tags, see Tag below) — this is closer to
+    a simple grouping/navigation aid than a full file-tree, matching the
+    scope actually asked for. name is plain Text (unique, case-sensitive)
+    rather than CITEXT like Tag: a folder is a container a user deliberately
+    organizes tests into, not a free-form label prone to case-variant
+    duplicates that should silently merge — a name collision here is a user
+    mistake worth surfacing, not something to paper over."""
+
+    __tablename__ = "folders"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    name: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class ExperimentAccess(Base):

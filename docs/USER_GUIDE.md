@@ -151,6 +151,28 @@ every tag with its experiment count, creator, and hover actions to rename,
 merge, or delete (individually or in bulk). Renaming into a name that
 collides with an existing tag offers to merge into it instead of failing.
 
+### Folders: organizing the A/B Tests list into buckets
+
+Where tags are free-form, overlapping labels, **folders** are simple,
+single-membership containers — one level deep, no folders-within-folders.
+A **Folders** panel sits to the left of the A/B Tests table: **All tests**
+(everything you can see), **Uncategorized** (not filed into any folder —
+where every test starts out), and any folders that exist, each showing how
+many tests it holds. Click one to filter the table to just that folder;
+click the panel's collapse arrow to hide it and reclaim table width. The
+folder filter combines with Status, Tags, and the search box — filtering to
+a folder plus a status still narrows to tests matching both.
+
+Any Editor can create a folder ("+" next to the panel heading, just a name).
+Filing a test into one — or back out to Uncategorized — needs the same edit
+access as renaming it or changing its tags: the owner, an access-editor, or
+an Admin. Do it from the hover **Move to folder** button on a row, or select
+several tests with Bulk select and move them all at once. Renaming or
+deleting a folder (via its "⋯" menu) is limited to whoever created it, or an
+Admin — deleting one does **not** delete the tests inside; they simply move
+back to Uncategorized, and the confirmation dialog tells you how many that
+will be before you proceed.
+
 ### Roles
 
 | Role | Can do |

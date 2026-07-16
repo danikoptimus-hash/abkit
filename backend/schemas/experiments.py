@@ -27,6 +27,9 @@ class ExperimentSummary(BaseModel):
     completed_at: datetime | None
     archived_at: datetime | None
     tags: list[TagOut] = []
+    # Item 5 (folders package) — null means Uncategorized, not "unknown".
+    folder_id: str | None = None
+    folder_name: str | None = None
 
 
 class PaginatedExperiments(BaseModel):
@@ -76,6 +79,8 @@ class ExperimentDetail(BaseModel):
     available_reports: list[str]
     files: list[FileInfo]
     tags: list[TagOut] = []
+    folder_id: str | None = None
+    folder_name: str | None = None
 
 
 class AuditEntryOut(BaseModel):

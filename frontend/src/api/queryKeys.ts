@@ -23,6 +23,9 @@ export const queryKeys = {
   adminTags: (q: string) => ['admin-tags', q] as const,
   adminTagsAll: () => ['admin-tags'] as const,
 
+  // Folders
+  folders: () => ['folders'] as const,
+
   // Datasets
   datasets: (page: number, q: string, source: string | undefined) => ['datasets', page, q, source] as const,
   datasetsAll: () => ['datasets'] as const,

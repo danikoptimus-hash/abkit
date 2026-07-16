@@ -1233,6 +1233,150 @@ def run_merge_tag(current_user: CurrentUser, tag_id: str, target_id: str) -> int
     return affected
 
 
+def run_create_folder(current_user: CurrentUser, name: str) -> Any:
+    """POST /folders — editor+ (CLAUDE.md 'Permissions model', folders row).
+    Unlike tags' get-or-create, a duplicate name is a user error, not
+    silently reused — folders are containers someone deliberately organizes
+    into, see abkit/db/models.py::Folder."""
+    require_role(current_user, "editor")
+    from abkit import storage
+    from abkit.db.repositories import FolderRepo
+
+    name = name.strip()
+    if not name:
+        raise storage.StorageError("Folder name cannot be empty")
+    if FolderRepo().find_by_name(name) is not None:
+        raise FolderNameConflictError(name)
+
+    folder = FolderRepo().create(name, created_by=uuid_mod.UUID(current_user.id))
+    _audit(current_user, "folder.create", object_type="folder", object_id=str(folder.id), object_name=folder.name)
+    return folder
+
+
+class FolderNameConflictError(Exception):
+    """Raised by run_create_folder/run_rename_folder on an exact-name
+    collision — unlike TagNameConflictError there's no merge follow-up
+    offered (folders don't merge), so the frontend just surfaces this as a
+    plain error (backend/errors.py maps it to 400)."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"A folder named '{name}' already exists")
+
+
+def list_folders(current_user: CurrentUser) -> Any:
+    """GET /folders — viewer+. Counts reflect only experiments the CURRENT
+    user can see (abkit/access.py::can_view_experiment), matching the list
+    page itself — a draft experiment hidden from this user shouldn't inflate
+    a folder's count with something they can't open to explain. Returns
+    (folders_with_counts, uncategorized_count, total_visible_count)."""
+    require_role(current_user, "viewer")
+    from abkit.access import can_view_experiment
+    from abkit.db.repositories import ExperimentAccessRepo, ExperimentRepo, FolderRepo
+
+    access_experiment_ids = ExperimentAccessRepo().experiment_ids_for_user(uuid_mod.UUID(current_user.id))
+    visible = [
+        e for e in ExperimentRepo().list_all()
+        if can_view_experiment(current_user, e, access_experiment_ids)
+    ]
+    counts: dict[uuid_mod.UUID | None, int] = {}
+    for e in visible:
+        counts[e.folder_id] = counts.get(e.folder_id, 0) + 1
+
+    folders = FolderRepo().list_all()
+    folders_with_counts = [(f, counts.get(f.id, 0)) for f in folders]
+    return folders_with_counts, counts.get(None, 0), len(visible)
+
+
+def _require_folder_owner_or_admin(current_user: CurrentUser, folder) -> None:
+    """Deleting/renaming a folder — its creator or an Admin only (CLAUDE.md
+    folders row: narrower than the editor+ needed to CREATE one, since this
+    changes/removes something someone else built)."""
+    if current_user.role == "admin":
+        return
+    if folder.created_by is not None and str(folder.created_by) == str(current_user.id):
+        return
+    raise AuthError("Only the folder's creator or an Admin can rename or delete it")
+
+
+def run_rename_folder(current_user: CurrentUser, folder_id: str, new_name: str) -> Any:
+    """PATCH /folders/{id} — creator or admin (see _require_folder_owner_or_admin)."""
+    from abkit import storage
+    from abkit.db.repositories import FolderRepo
+
+    parsed_id = uuid_mod.UUID(folder_id)
+    folder = FolderRepo().get_by_id(parsed_id)
+    if folder is None:
+        raise storage.StorageError(f"Folder '{folder_id}' not found")
+    _require_folder_owner_or_admin(current_user, folder)
+
+    new_name = new_name.strip()
+    if not new_name:
+        raise storage.StorageError("Folder name cannot be empty")
+    existing = FolderRepo().find_by_name(new_name)
+    if existing is not None and existing.id != parsed_id:
+        raise FolderNameConflictError(new_name)
+
+    old_name = folder.name
+    folder = FolderRepo().rename(parsed_id, new_name)
+    _audit(
+        current_user, "folder.rename", object_type="folder", object_id=folder_id, object_name=new_name,
+        details={"from": old_name, "to": new_name},
+    )
+    return folder
+
+
+def run_delete_folder(current_user: CurrentUser, folder_id: str) -> int:
+    """DELETE /folders/{id} — creator or admin. Experiments in the folder
+    are NOT deleted — folder_id is ON DELETE SET NULL (migration 0017), they
+    move to Uncategorized. Returns how many, for the confirmation dialog."""
+    from abkit import storage
+    from abkit.db.repositories import ExperimentRepo, FolderRepo
+
+    parsed_id = uuid_mod.UUID(folder_id)
+    folder = FolderRepo().get_by_id(parsed_id)
+    if folder is None:
+        raise storage.StorageError(f"Folder '{folder_id}' not found")
+    _require_folder_owner_or_admin(current_user, folder)
+
+    affected = ExperimentRepo().count_in_folder(parsed_id)
+    FolderRepo().delete(parsed_id)
+    _audit(
+        current_user, "folder.delete", object_type="folder", object_id=folder_id, object_name=folder.name,
+        details={"affected_experiments": affected},
+    )
+    return affected
+
+
+def run_move_experiment_to_folder(current_user: CurrentUser, name: str, folder_id: str | None) -> Any:
+    """PUT /experiments/{name}/folder — same edit-access gate as rename/
+    tags/blocks (owner/access-editor/admin of THIS experiment, CLAUDE.md
+    'Permissions model') — moving a test is a property of the test, not of
+    the folder, so run_delete_folder's narrower creator-or-admin rule
+    doesn't apply here. folder_id=None files it back under Uncategorized."""
+    from abkit import storage
+    from abkit.db.repositories import ExperimentRepo, FolderRepo
+
+    exp_row = _get_experiment_row(name)
+    require_experiment_edit_access(current_user, exp_row)
+
+    parsed_folder_id = uuid_mod.UUID(folder_id) if folder_id else None
+    new_folder = FolderRepo().get_by_id(parsed_folder_id) if parsed_folder_id else None
+    if parsed_folder_id is not None and new_folder is None:
+        raise storage.StorageError(f"Folder '{folder_id}' not found")
+    old_folder = FolderRepo().get_by_id(exp_row.folder_id) if exp_row.folder_id else None
+
+    ExperimentRepo().set_folder(exp_row.id, parsed_folder_id)
+    _audit(
+        current_user, "experiment.folder_change", object_type="experiment", object_id=str(exp_row.id),
+        object_name=name,
+        details={
+            "from": old_folder.name if old_folder else None,
+            "to": new_folder.name if new_folder else None,
+        },
+    )
+    return {"folder_id": str(parsed_folder_id) if parsed_folder_id else None}
+
+
 def run_upload_flow_image(
     current_user: CurrentUser, name: str, group_name: str, flow_title: str, raw: bytes
 ) -> Any:

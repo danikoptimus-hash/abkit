@@ -96,6 +96,15 @@ def register_exception_handlers(app: FastAPI) -> None:
             ),
         )
 
+    from abkit.jobs import FolderNameConflictError
+
+    @app.exception_handler(FolderNameConflictError)
+    async def _handle_folder_name_conflict_error(request: Request, exc: FolderNameConflictError) -> JSONResponse:
+        # POST /folders or PATCH /folders/{id} colliding with an existing
+        # folder's exact name (item 5, folders package) — no merge
+        # follow-up like tags, just a plain rejection.
+        return JSONResponse(status_code=400, content=_error_body("folder_name_conflict", str(exc)))
+
     @app.exception_handler(RequestValidationError)
     async def _handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(

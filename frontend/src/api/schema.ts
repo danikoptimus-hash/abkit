@@ -201,6 +201,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/experiments/{name}/folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Experiment Folder
+         * @description Row action "Move to folder" (item 5, folders package) — same
+         *     edit-access gate as tags/blocks/rename (owner/access-editor/Admin,
+         *     enforced in abkit/jobs.py::run_move_experiment_to_folder). folder_id
+         *     null files it back under Uncategorized.
+         */
+        put: operations["put_experiment_folder_api_v1_experiments__name__folder_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/experiments/bulk-move-folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Move Folder
+         * @description Bulk select + "Move to folder" (item 5, folders package) — mirrors
+         *     bulk_delete_experiments's shape: permission is checked PER experiment
+         *     (owner/access-editor/Admin), rows the user can't edit are skipped, not
+         *     silently dropped.
+         */
+        post: operations["bulk_move_folder_api_v1_experiments_bulk_move_folder_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/experiments/{name}/reports/{report_name}": {
         parameters: {
             query?: never;
@@ -1158,6 +1204,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Folders Route */
+        get: operations["list_folders_route_api_v1_folders_get"];
+        put?: never;
+        /**
+         * Create Folder
+         * @description editor+ (abkit/jobs.py::run_create_folder).
+         */
+        post: operations["create_folder_api_v1_folders_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/folders/{folder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Folder
+         * @description Creator or Admin only (abkit/jobs.py::run_delete_folder) — moves its
+         *     experiments to Uncategorized via ON DELETE SET NULL, not a separate step.
+         */
+        delete: operations["delete_folder_api_v1_folders__folder_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename Folder
+         * @description Creator or Admin only (abkit/jobs.py::run_rename_folder).
+         */
+        patch: operations["rename_folder_api_v1_folders__folder_id__patch"];
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -1567,6 +1659,27 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** BulkMoveFolderRequest */
+        BulkMoveFolderRequest: {
+            /** Names */
+            names: string[];
+            /** Folder Id */
+            folder_id?: string | null;
+        };
+        /** BulkMoveFolderResult */
+        BulkMoveFolderResult: {
+            /** Moved */
+            moved: string[];
+            /** Skipped */
+            skipped: components["schemas"]["BulkMoveFolderSkipped"][];
+        };
+        /** BulkMoveFolderSkipped */
+        BulkMoveFolderSkipped: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Old Password */
@@ -1624,6 +1737,11 @@ export interface components {
              * @default false
              */
             ssl: boolean;
+        };
+        /** CreateFolderRequest */
+        CreateFolderRequest: {
+            /** Name */
+            name: string;
         };
         /** CreateTagRequest */
         CreateTagRequest: {
@@ -1822,6 +1940,11 @@ export interface components {
             /** Confirm */
             confirm: string;
         };
+        /** DeleteFolderResponse */
+        DeleteFolderResponse: {
+            /** Affected Experiments */
+            affected_experiments: number;
+        };
         /** DeleteTagResponse */
         DeleteTagResponse: {
             /** Affected Experiments */
@@ -2015,6 +2138,10 @@ export interface components {
              * @default []
              */
             tags: components["schemas"]["TagOut"][];
+            /** Folder Id */
+            folder_id?: string | null;
+            /** Folder Name */
+            folder_name?: string | null;
         };
         /** ExperimentPropertiesOut */
         ExperimentPropertiesOut: {
@@ -2067,6 +2194,10 @@ export interface components {
              * @default []
              */
             tags: components["schemas"]["TagOut"][];
+            /** Folder Id */
+            folder_id?: string | null;
+            /** Folder Name */
+            folder_name?: string | null;
         };
         /** FileInfo */
         FileInfo: {
@@ -2090,6 +2221,26 @@ export interface components {
              * Format: date-time
              */
             uploaded_at: string;
+        };
+        /** FolderOut */
+        FolderOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Count */
+            count: number;
+            /** Created By Email */
+            created_by_email?: string | null;
+        };
+        /** FoldersResponse */
+        FoldersResponse: {
+            /** Items */
+            items: components["schemas"]["FolderOut"][];
+            /** Uncategorized Count */
+            uncategorized_count: number;
+            /** All Count */
+            all_count: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -2410,6 +2561,11 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** RenameFolderRequest */
+        RenameFolderRequest: {
+            /** Name */
+            name: string;
+        };
         /** RenameTagRequest */
         RenameTagRequest: {
             /** Name */
@@ -2484,6 +2640,11 @@ export interface components {
         SchemasResponse: {
             /** Schemas */
             schemas: string[];
+        };
+        /** SetExperimentFolderRequest */
+        SetExperimentFolderRequest: {
+            /** Folder Id */
+            folder_id?: string | null;
         };
         /** SetExperimentTagsRequest */
         SetExperimentTagsRequest: {
@@ -2984,6 +3145,8 @@ export interface operations {
                 q?: string | null;
                 /** @description Tag id(s) — AND logic across multiple */
                 tag?: string[] | null;
+                /** @description Folder id, or the literal 'none' for Uncategorized (folder_id IS NULL) */
+                folder?: string | null;
                 page?: number;
                 page_size?: number;
             };
@@ -3183,6 +3346,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TagOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_experiment_folder_api_v1_experiments__name__folder_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetExperimentFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_move_folder_api_v1_experiments_bulk_move_folder_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkMoveFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkMoveFolderResult"];
                 };
             };
             /** @description Validation Error */
@@ -5098,6 +5335,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_folders_route_api_v1_folders_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FoldersResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_folder_api_v1_folders_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_folder_api_v1_folders__folder_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteFolderResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_folder_api_v1_folders__folder_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderOut"];
                 };
             };
             /** @description Validation Error */

@@ -28,6 +28,7 @@ from abkit.db.models import (
     ExperimentDataset,
     ExperimentFlowImage,
     ExperimentTag,
+    Folder,
     Job,
     MonitoringSnapshot,
     Tag,
@@ -293,6 +294,30 @@ class ExperimentRepo:
             if new_name != name and s.scalar(select(Experiment).where(Experiment.name == new_name)) is not None:
                 raise RepoError(f"An experiment named '{new_name}' already exists")
             exp.name = new_name
+
+    def set_folder(self, experiment_id: uuid_mod.UUID, folder_id: uuid_mod.UUID | None) -> None:
+        """Item 5 (folders package) — folder_id=None files it back under
+        Uncategorized. No existence check on folder_id here; the caller
+        (abkit/jobs.py::run_move_experiment_to_folder) already verified the
+        target folder exists, so it can name it in the audit details."""
+        with session_scope() as s:
+            exp = s.get(Experiment, experiment_id)
+            if exp is None:
+                raise RepoError(f"Experiment {experiment_id} not found")
+            exp.folder_id = folder_id
+
+    def count_in_folder(self, folder_id: uuid_mod.UUID) -> int:
+        """Delete-folder confirmation (item 5) — how many experiments would
+        move to Uncategorized, regardless of whether the acting user can see
+        all of them (deleting the folder itself is an admin/creator action,
+        not gated by per-experiment visibility)."""
+        with session_scope() as s:
+            return (
+                s.scalar(
+                    select(func.count()).select_from(Experiment).where(Experiment.folder_id == folder_id)
+                )
+                or 0
+            )
 
     def delete(self, name: str) -> None:
         """Admin-only (DOCKER.md §4.1, "Удалять эксперименты") — реальное
@@ -1127,6 +1152,67 @@ class DatabaseConnectionRepo:
             if conn is None:
                 raise RepoError(f"Database connection {conn_id} not found")
             s.delete(conn)
+
+
+class FolderRepo:
+    """Folders for A/B tests (item 5, folders package, see
+    abkit/db/models.py::Folder for the design decision). Unlike TagRepo's
+    get_or_create(), create()/rename() here do NOT check name uniqueness
+    themselves — the caller (abkit/jobs.py) is responsible for calling
+    find_by_name() first and raising a clean user-facing error, same
+    convention TagRepo's rename() already established (see its docstring)."""
+
+    def create(self, name: str, *, created_by: uuid_mod.UUID | None = None) -> Folder:
+        with session_scope() as s:
+            max_position = s.scalar(select(func.max(Folder.position))) or 0
+            folder = Folder(name=name, position=max_position + 1, created_by=created_by)
+            s.add(folder)
+            s.flush()
+            s.refresh(folder)
+            s.expunge(folder)
+            return folder
+
+    def get_by_id(self, folder_id: uuid_mod.UUID) -> Folder | None:
+        with session_scope() as s:
+            folder = s.get(Folder, folder_id)
+            if folder is not None:
+                s.expunge(folder)
+            return folder
+
+    def find_by_name(self, name: str) -> Folder | None:
+        with session_scope() as s:
+            folder = s.scalar(select(Folder).where(Folder.name == name))
+            if folder is not None:
+                s.expunge(folder)
+            return folder
+
+    def list_all(self) -> list[Folder]:
+        with session_scope() as s:
+            rows = list(s.scalars(select(Folder).order_by(Folder.position, Folder.name)))
+            for r in rows:
+                s.expunge(r)
+            return rows
+
+    def rename(self, folder_id: uuid_mod.UUID, new_name: str) -> Folder:
+        with session_scope() as s:
+            folder = s.get(Folder, folder_id)
+            if folder is None:
+                raise RepoError(f"Folder {folder_id} not found")
+            folder.name = new_name
+            s.flush()
+            s.refresh(folder)
+            s.expunge(folder)
+            return folder
+
+    def delete(self, folder_id: uuid_mod.UUID) -> None:
+        """Experiments filed under this folder are NOT touched here — FK
+        ON DELETE SET NULL (migration 0017) unfiles them to Uncategorized
+        automatically as part of this same DELETE statement."""
+        with session_scope() as s:
+            folder = s.get(Folder, folder_id)
+            if folder is None:
+                raise RepoError(f"Folder {folder_id} not found")
+            s.delete(folder)
 
 
 class TagRepo:
