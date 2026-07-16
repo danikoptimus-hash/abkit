@@ -6,7 +6,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import os
+import platform
 import threading
 import uuid as uuid_mod
 from concurrent.futures import ThreadPoolExecutor
@@ -54,6 +57,29 @@ def _human_readable_message(exc: BaseException, error_id: str) -> str:
     ):
         return str(exc)
     return f"Internal processing error (ref: {error_id})"
+
+
+def _trim_malloc() -> None:
+    """Memory hygiene (OPERATIONS.md §"Память backend-процесса"): a heavy
+    design/analyze job's frame — the actual big pandas DataFrames — has
+    already fully unwound by the time _run's finally block runs (fn()
+    already returned/raised), so there is no live Python reference left for
+    a `del` to catch here. What CAN still hold the freed heap is glibc's
+    allocator: freed memory isn't necessarily handed back to the OS on its
+    own, which is exactly what shows up as an RSS "waterline" that survives
+    a job even though nothing Python-side is leaking (confirmed empirically:
+    8 sequential heavy design jobs plateau around a fixed RSS band instead
+    of growing run over run — see the diagnostic in git history/
+    OPERATIONS.md, not a reference leak). malloc_trim(0) asks glibc to
+    release what it can; harmless no-op wherever it doesn't exist (musl,
+    macOS, Windows dev machines) — only Linux/glibc (the deployed image)
+    matters."""
+    if platform.system() != "Linux":
+        return
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except OSError:
+        pass
 
 
 class RequiresConfirmation(Exception):
@@ -153,6 +179,17 @@ class JobRunner:
         finally:
             sampler_stop.set()
             sampler.join(timeout=5)
+            # Contract (abkit/jobs.py job functions, verified across every
+            # job type — design/analyze/validate/sql-fetch/refresh/demo):
+            # `result` is always small scalars/paths, never a raw DataFrame
+            # (job.result_ref is JSONB — a DataFrame there would fail to
+            # serialize, not silently leak). So by this point every big
+            # DataFrame the job touched is already unreachable — gc.collect()
+            # only needs to break reference cycles (pandas/Pipeline objects
+            # that reference each other); malloc_trim() handles giving the
+            # freed heap back to the OS, which gc alone never does.
+            gc.collect()
+            _trim_malloc()
 
     def mark_unfinished_jobs_failed_on_startup(self) -> None:
         """FRONTEND.md §4: "Незавершенные при старте бэкенда помечаются failed

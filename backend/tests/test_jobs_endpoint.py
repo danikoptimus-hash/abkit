@@ -62,6 +62,39 @@ def test_job_runner_submit_completes_and_reports_progress(db_url):
         runner.shutdown(wait=True)
 
 
+def test_job_runner_runs_memory_hygiene_after_every_job(db_url, monkeypatch):
+    """Memory hygiene (backend/jobs/runner.py): gc.collect() + malloc_trim()
+    run in _run's finally block for every job — regardless of outcome
+    (completed here; failure/requires_confirmation share the same finally)."""
+    import backend.jobs.runner as runner_module
+
+    calls: list[str] = []
+    monkeypatch.setattr(runner_module.gc, "collect", lambda: calls.append("gc.collect"))
+    monkeypatch.setattr(runner_module, "_trim_malloc", lambda: calls.append("malloc_trim"))
+
+    runner = runner_module.JobRunner(max_workers=1)
+    try:
+        job = runner.submit("design", None, lambda reporter: {"ok": True})
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if JobRepo().get_by_id(job.id).status == "completed":
+                break
+            time.sleep(0.02)
+        assert calls == ["gc.collect", "malloc_trim"]
+    finally:
+        runner.shutdown(wait=True)
+
+
+def test_trim_malloc_is_a_noop_off_linux(monkeypatch):
+    """_trim_malloc() only does anything on Linux/glibc (the deployed image)
+    — a no-op everywhere else (musl, macOS, Windows dev machines) rather
+    than a crash from a missing libc.so.6."""
+    import backend.jobs.runner as runner_module
+
+    monkeypatch.setattr(runner_module.platform, "system", lambda: "Windows")
+    runner_module._trim_malloc()  # must not raise
+
+
 def test_job_runner_marks_unfinished_jobs_failed_on_startup(db_url):
     from backend.jobs.runner import JobRunner
 

@@ -839,6 +839,16 @@ class Experiment:
         candidates = isolation_result.candidates
         if len(candidates) == 0:
             raise DesignError("No candidates left for the split after isolation")
+        # Memory hygiene (item 3.2): `data` (the full uploaded/read frame) is
+        # never read again below this point — only `candidates` is. When
+        # isolation actually filtered rows, apply_isolation() built
+        # `candidates` as a NEW (smaller) frame, leaving `data` as dead
+        # weight for the rest of this long-running function (strata
+        # building, split, power calc, checks, report + samples writing).
+        # Safe unconditionally: when isolation excluded nothing,
+        # `candidates is data` and this just drops one of two references —
+        # the object stays alive via `candidates` as expected.
+        del data
 
         strata_nan_counts = nan_counts_by_column(candidates, config.strata) if config.strata else {}
         n_dropped_for_nan_strata = 0
