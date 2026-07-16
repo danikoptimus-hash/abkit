@@ -1,7 +1,11 @@
 .venv/
 venv/
 env/
-.git/
+# .git/ is NOT excluded (item 8, audit-details+ package) — docker/Dockerfile's
+# `version` stage reads it (git rev-parse --short HEAD) to compute the
+# "dev (<short sha>)" fallback version for local builds without an explicit
+# ABKIT_VERSION build-arg. Small cost (a few MB) shared by both Dockerfiles
+# (same context "."), not worth a separate build context just to avoid it.
 .github/
 tests/
 __pycache__/

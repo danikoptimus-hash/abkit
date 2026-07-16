@@ -1,7 +1,13 @@
 # syntax=docker/dockerfile:1
-# Мультистейдж-сборка (DOCKER.md §7.1). Тег версии (abkit:1.4.0 + abkit:latest)
-# проставляется снаружи при `docker build -t ...` (см. .github/workflows/ci.yml,
-# этап D6) — сюда попадает только как OCI-лейбл для трассируемости образа.
+# Мультистейдж-сборка (DOCKER.md §7.1). Версия (item 8, audit-details+
+# пакет — CLAUDE.md "Правило: релизный процесс"): на тегированном CI-билде
+# (build-and-push, .github/workflows/ci.yml) ABKIT_VERSION приходит снаружи
+# как build-arg, посчитанный из git-тега (`vX.Y.Z` -> `X.Y.Z`) — и это же
+# значение записывается в OCI-лейбл ниже. На ЛОКАЛЬНОМ билде (просто
+# `docker compose up -d --build`, без --build-arg) ARG остается на дефолте
+# "dev" — тогда abkit/__init__.py::_read_version() падает на файл GIT_SHA
+# (стадия `version` ниже, git rev-parse внутри билда, без участия
+# разработчика) и показывает "dev (<short sha>)".
 #
 # Образ backend-сервиса (FastAPI/uvicorn, FRONTEND.md) — интерфейс React
 # (сервис frontend в docker-compose.yml, отдельный образ frontend/Dockerfile).
@@ -20,9 +26,22 @@ COPY abkit ./abkit
 RUN pip install --no-cache-dir --upgrade pip \
  && pip wheel --no-cache-dir --wheel-dir /wheels ".[db-connectors]"
 
+# Отдельная стадия (не задевает кэш builder'а выше — .git меняется на каждый
+# коммит, а слой с зависимостями должен оставаться закэшированным). Просто
+# короткий hex sha, без git-describe/тегов — тег-версию отдает ABKIT_VERSION
+# build-arg (CI), эта стадия только про fallback-отображение для локальных
+# билетов без явного тега.
+FROM python:3.12-slim AS version
+WORKDIR /repo
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
+COPY .git ./.git
+RUN git rev-parse --short HEAD > /GIT_SHA 2>/dev/null || echo "unknown" > /GIT_SHA
+
 FROM python:3.12-slim
 
 ARG ABKIT_VERSION=dev
+ENV ABKIT_VERSION=${ABKIT_VERSION}
 LABEL org.opencontainers.image.title="abkit" \
       org.opencontainers.image.version="${ABKIT_VERSION}" \
       org.opencontainers.image.source="https://github.com/danikoptimus-hash/abkit"
@@ -55,6 +74,7 @@ RUN pip install --no-cache-dir --no-compile /wheels/*.whl \
 # локальной editable-разработке. Локальная копия в sys.path имеет приоритет
 # перед версией из site-packages (тем же wheel'ом) — это осознанно и безвредно.
 COPY . .
+COPY --from=version /GIT_SHA /app/GIT_SHA
 RUN mkdir -p /data/experiments \
  && chown -R abkit:abkit /app /data \
  && chmod +x /app/docker/entrypoint-backend.sh

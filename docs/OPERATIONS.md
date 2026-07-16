@@ -107,13 +107,24 @@ git checkout v2.1.0
 # 3. Пересборка и рестарт (миграции применяются автоматически при старте backend).
 docker compose up -d --build
 
-# 4. Smoke-чек (см. §2) — все сервисы healthy, login и /api/v1/version отвечают.
+# 4. Smoke-чек (см. §2) — все сервисы healthy, login и /api/v1/version отвечают
+#    С ПРАВИЛЬНЫМ значением version (см. ниже — до item 8 итогового пакета
+#    это поле молча показывало 2.0.0 независимо от реально задеплоенного
+#    тега, так что раньше этот curl проверял только "отвечает", не "совпадает").
 docker compose ps
 curl -sf http://localhost:${ABKIT_PORT:-8080}/login >/dev/null && echo OK
-curl -sf http://localhost:${ABKIT_PORT:-8080}/api/v1/version
+curl -sf http://localhost:${ABKIT_PORT:-8080}/api/v1/version  # должно совпасть с тегом из шага 2
 ```
 
 Все четыре шага делает одной командой `scripts/update.sh <тег>` (§ниже).
+
+**Откуда берется `version` в ответе** (item 8, CLAUDE.md «Правило: релизный
+процесс», пункт г): не хардкод в коде — `ABKIT_VERSION`, проставленный
+`docker/Dockerfile`'s `ARG`→`ENV` из `--build-arg`, который CI вычисляет из
+самого тега (`${GITHUB_REF_NAME#v}`) на push `v*`. Собранный локально образ
+без явного тега (`docker compose up -d --build` из §2 выше) показывает
+`dev (<short sha>)` — короткий hash, посчитанный отдельной Docker-стадией
+`version` во время сборки, без ручных шагов.
 
 Даунтайм — время пересборки образов + перезапуска контейнеров (Postgres не
 перезапускается, если его образ/конфиг не менялись). Если вместо локальной
