@@ -28,10 +28,23 @@ class UserOut(BaseModel):
     name: str
     role: str
     must_change_password: bool
+    # Per-user UI-настройки едут вместе со всем остальным про текущего
+    # пользователя: и /login, и /me отдают UserOut, так что отдельного
+    # запроса за настройками на старте приложения не нужно.
+    folders_panel_collapsed: bool = True
 
     @classmethod
     def from_current_user(cls, user: CurrentUser) -> "UserOut":
         return cls(
             id=user.id, email=user.email, name=user.name, role=user.role,
             must_change_password=user.must_change_password,
+            folders_panel_collapsed=user.folders_panel_collapsed,
         )
+
+
+class UpdatePreferencesRequest(BaseModel):
+    """PATCH /auth/me/preferences — частичный патч (тот же паттерн, что у
+    admin'ского PatchUserRequest): None означает "не трогать", а не "сбросить".
+    Новые настройки добавляются сюда новым опциональным полем."""
+
+    folders_panel_collapsed: bool | None = None

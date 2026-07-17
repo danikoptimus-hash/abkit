@@ -100,6 +100,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/me/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update My Preferences
+         * @description Per-user UI-настройки текущего пользователя (пакет share+folders —
+         *     первая такая настройка в приложении).
+         *
+         *     Любая роль: это про СВОЙ интерфейс, не про данные. В audit_log не пишется
+         *     осознанно — журнал про изменения данных и прав, а "свернул панель папок"
+         *     там был бы шумом, который прячет содержательные записи.
+         *
+         *     Возвращает свежий UserOut целиком (а не только измененное поле), чтобы
+         *     фронт мог положить ответ прямо в AuthContext, не собирая состояние из
+         *     кусочков.
+         */
+        patch: operations["update_my_preferences_api_v1_auth_me_preferences_patch"];
+        trace?: never;
+    };
     "/api/v1/auth/change-password": {
         parameters: {
             query?: never;
@@ -3066,6 +3095,16 @@ export interface components {
             /** Visible Roles */
             visible_roles?: string[] | null;
         };
+        /**
+         * UpdatePreferencesRequest
+         * @description PATCH /auth/me/preferences — частичный патч (тот же паттерн, что у
+         *     admin'ского PatchUserRequest): None означает "не трогать", а не "сбросить".
+         *     Новые настройки добавляются сюда новым опциональным полем.
+         */
+        UpdatePreferencesRequest: {
+            /** Folders Panel Collapsed */
+            folders_panel_collapsed?: boolean | null;
+        };
         /** UserAdminOut */
         UserAdminOut: {
             /** Id */
@@ -3119,6 +3158,11 @@ export interface components {
             role: string;
             /** Must Change Password */
             must_change_password: boolean;
+            /**
+             * Folders Panel Collapsed
+             * @default true
+             */
+            folders_panel_collapsed: boolean;
         };
         /** ValidateRequest */
         ValidateRequest: {
@@ -3284,6 +3328,41 @@ export interface operations {
             };
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_preferences_api_v1_auth_me_preferences_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePreferencesRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

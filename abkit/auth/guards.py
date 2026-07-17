@@ -24,6 +24,11 @@ class CurrentUser:
     name: str
     role: str
     must_change_password: bool = False
+    # UI-настройка, а не право (как и must_change_password выше) — едет здесь
+    # потому, что CurrentUser и так проекция строки users на запрос, и
+    # current_user_from_token эту строку уже читает: иначе /me и /login
+    # ходили бы в БД второй раз за тем же самым. Гварды/jobs ее игнорируют.
+    folders_panel_collapsed: bool = True
 
 
 def require_login(current_user: CurrentUser | None) -> CurrentUser:

@@ -166,9 +166,13 @@ tests it holds), and — only if at least one test isn't filed anywhere —
 **Uncategorized** at the bottom, shown muted since it isn't a real folder
 you created (just a view over "no folder"; it can't be renamed or deleted).
 Click one to filter the table to just that folder; click the panel's
-collapse arrow to hide it and reclaim table width. The folder filter
-combines with Status, Tags, and the search box — filtering to a folder plus
-a status still narrows to tests matching both.
+collapse arrow to hide it and reclaim table width. The panel starts
+collapsed — click **Show folders** to open it. Whichever way you leave it is
+remembered for your account, so it stays that way as you move around the app,
+after a reload, and on your next sign-in; it's your own setting and doesn't
+affect anyone else. The folder filter combines with Status, Tags, and the
+search box — filtering to a folder plus a status still narrows to tests
+matching both.
 
 Any Editor can create a folder ("+" next to the panel heading, just a name).
 Filing a test into one — or back out to Uncategorized — needs the same edit

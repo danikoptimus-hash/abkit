@@ -118,6 +118,7 @@ def current_user_from_token(token: str | None) -> CurrentUser | None:
         name=user.full_name,
         role=user.role,
         must_change_password=user.must_change_password,
+        folders_panel_collapsed=user.folders_panel_collapsed,
     )
 
 

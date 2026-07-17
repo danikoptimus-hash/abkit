@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { loginViaUi, seedExperiment, clickSelectOption } from './helpers'
+import { loginViaUi, seedExperiment, clickSelectOption, expandFolderPanel } from './helpers'
 
 const API_BASE = process.env.E2E_API_BASE ?? 'http://localhost:8000/api/v1'
 
@@ -21,6 +21,10 @@ test('Create a folder, move tests into it (row + bulk), filter, then delete it a
   await seedExperiment(request, expB)
   await loginViaUi(page)
   await page.goto('/experiments')
+
+  // Панель свернута по умолчанию (пакет share+folders) — раскрываем, иначе
+  // ни nav, ни кнопок в нем просто нет в DOM.
+  await expandFolderPanel(page)
 
   // Scoped to the FolderPanel (<nav aria-label="Folders">) — the Folder
   // column added to the table renders the same folder name as a Tag, so an
@@ -96,6 +100,7 @@ test('Only editor+ sees "New folder", and folder filter composes with status/tag
   await request.patch(`${API_BASE}/experiments/${expName}`, { data: { publication_status: 'published' } })
   await loginViaUi(page, 'viewer@e2e.test', 'e2epass123')
   await page.goto('/experiments')
+  await expandFolderPanel(page)
 
   const panel = page.getByRole('navigation', { name: 'Folders' })
   await expect(panel.getByRole('button', { name: 'New folder' })).not.toBeVisible()

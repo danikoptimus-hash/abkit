@@ -12,7 +12,13 @@ from abkit.auth.guards import AuthError, CurrentUser
 from abkit.db.repositories import RepoError
 from backend.deps import COOKIE_NAME, get_current_user
 from backend.errors import APIError
-from backend.schemas.auth import ChangePasswordRequest, LoginRequest, RegisterRequest, UserOut
+from backend.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    RegisterRequest,
+    UpdatePreferencesRequest,
+    UserOut,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -103,6 +109,42 @@ def logout(response: Response) -> dict[str, bool]:
 @router.get("/me", response_model=UserOut)
 def me(user: CurrentUser = Depends(get_current_user)) -> UserOut:
     return UserOut.from_current_user(user)
+
+
+@router.patch("/me/preferences", response_model=UserOut)
+def update_my_preferences(
+    body: UpdatePreferencesRequest, user: CurrentUser = Depends(get_current_user)
+) -> UserOut:
+    """Per-user UI-настройки текущего пользователя (пакет share+folders —
+    первая такая настройка в приложении).
+
+    Любая роль: это про СВОЙ интерфейс, не про данные. В audit_log не пишется
+    осознанно — журнал про изменения данных и прав, а "свернул панель папок"
+    там был бы шумом, который прячет содержательные записи.
+
+    Возвращает свежий UserOut целиком (а не только измененное поле), чтобы
+    фронт мог положить ответ прямо в AuthContext, не собирая состояние из
+    кусочков.
+    """
+    import uuid as uuid_mod
+
+    from abkit.db.repositories import UserRepo
+
+    try:
+        UserRepo().update_preferences(
+            uuid_mod.UUID(user.id), folders_panel_collapsed=body.folders_panel_collapsed
+        )
+    except RepoError as e:
+        raise APIError(404, "not_found", str(e)) from e
+
+    updated = UserRepo().get_by_id(uuid_mod.UUID(user.id))
+    if updated is None:
+        raise APIError(404, "not_found", "User not found")
+    return UserOut(
+        id=str(updated.id), email=updated.email, name=updated.full_name, role=updated.role,
+        must_change_password=updated.must_change_password,
+        folders_panel_collapsed=updated.folders_panel_collapsed,
+    )
 
 
 @router.post("/change-password")

@@ -45,6 +45,10 @@ class User(Base):
     role: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Первая per-user UI-настройка (миграция 0018): панель папок на
+    # /experiments свернута по умолчанию, но выбор пользователя запоминается.
+    # default=True здесь — зеркало server_default=true в миграции.
+    folders_panel_collapsed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     failed_logins: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

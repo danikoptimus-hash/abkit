@@ -246,3 +246,24 @@ export async function uploadDataset(
   const dataset = await uploadResp.json()
   return { id: dataset.id, filename: dataset.filename }
 }
+
+/** Разворачивает панель папок, если она свернута, и дожидается ее появления.
+ *
+ * Нужен, потому что панель теперь свернута ПО УМОЛЧАНИЮ, а состояние —
+ * персистентная per-user настройка (users.folders_panel_collapsed, миграция
+ * 0018). Отсюда два требования, из-за которых это helper, а не одна строка на
+ * месте:
+ *
+ * 1) Тест, работающий с панелью, обязан сначала ее раскрыть — раньше она была
+ *    развернута сама.
+ * 2) Helper ОБЯЗАН быть идемпотентным: спеки делят учетку admin@e2e.test, и
+ *    раскрытая одним тестом панель остается раскрытой для следующего. Слепой
+ *    click('Show folders') во втором тесте упал бы — кнопки уже нет.
+ */
+export async function expandFolderPanel(page: Page) {
+  const showButton = page.getByRole('button', { name: 'Show folders' })
+  if (await showButton.isVisible().catch(() => false)) {
+    await showButton.click()
+  }
+  await expect(page.getByRole('navigation', { name: 'Folders' })).toBeVisible()
+}

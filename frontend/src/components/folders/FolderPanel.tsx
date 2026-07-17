@@ -36,10 +36,32 @@ export function FolderPanel({
   selected: string | undefined
   onSelect: (value: string | undefined) => void
 }) {
-  const { user } = useAuth()
+  const { user, updatePreferences } = useAuth()
   const queryClient = useQueryClient()
-  const [collapsed, setCollapsed] = useState(false)
   const canCreate = hasMinRole(user, 'editor')
+
+  // Свернуто по умолчанию, и выбор пользователя запоминается на СЕРВЕРЕ
+  // (users.folders_panel_collapsed, миграция 0018). Раньше здесь был
+  // useState(false) — из-за него панель, во-первых, всегда открывалась
+  // развернутой, во-вторых, забывала выбор при любом уходе со страницы: этот
+  // компонент размонтируется вместе со списком. Состояние живет в
+  // AuthContext (он смонтирован выше роутера), поэтому переживает навигацию,
+  // а приезжая в UserOut — и перезагрузку.
+  //
+  // `?? true` — не только про "user еще не загружен": дефолт "свернута" тут
+  // должен совпадать со server_default колонки, иначе панель на миг мигнет
+  // развернутой до ответа /me.
+  const collapsed = user?.folders_panel_collapsed ?? true
+
+  const setCollapsed = async (next: boolean) => {
+    try {
+      await updatePreferences({ folders_panel_collapsed: next })
+    } catch (e) {
+      // Откат уже сделан в updatePreferences — здесь только сказать об этом
+      // вслух: панель молча прыгнувшая обратно выглядит как баг.
+      message.error(e instanceof Error ? e.message : 'Could not save your preference')
+    }
+  }
 
   const { data } = useQuery({
     queryKey: queryKeys.folders(),

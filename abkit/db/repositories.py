@@ -125,6 +125,19 @@ class UserRepo:
             user.first_name = first_name
             user.last_name = last_name
 
+    def update_preferences(
+        self, user_id: uuid_mod.UUID, *, folders_panel_collapsed: bool | None = None
+    ) -> None:
+        """Частичный патч UI-настроек: None = "не трогать". Новая настройка —
+        новый именованный аргумент здесь и новое поле в
+        UpdatePreferencesRequest, а не словарь неизвестного состава."""
+        with session_scope() as s:
+            user = s.get(User, user_id)
+            if user is None:
+                raise RepoError(f"User {user_id} not found")
+            if folders_panel_collapsed is not None:
+                user.folders_panel_collapsed = folders_panel_collapsed
+
     def set_password_hash(
         self, user_id: uuid_mod.UUID, password_hash: str, must_change_password: bool = False
     ) -> None:
