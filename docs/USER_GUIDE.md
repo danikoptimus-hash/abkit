@@ -175,12 +175,49 @@ Admin — deleting one does **not** delete the tests inside; they simply move
 back to Uncategorized, and the confirmation dialog tells you how many that
 will be before you proceed.
 
+### Export and import: moving a test between instances
+
+A test can be exported to a single `.zip` and imported back — into the same
+instance (to clone it) or into a different one (to migrate it). Any Editor can
+export any test they can see; exporting is a read, so you don't need to own
+the test or have edit access to it.
+
+**Export** is available from the hover **Export** button on a row of the A/B
+Tests list, and from the **⋯** menu on the test's own page. The archive
+carries the design (groups, metrics, split settings), the group assignments,
+the Hypothesis/Conclusions/Decision text, tags, statuses, every analysis run,
+and the design/analysis reports.
+
+Datasets are the one thing **not** included by default: they're referenced by
+name and content hash instead, which is all the target needs when it already
+has the same data. Tick **Include dataset snapshots** to embed the data itself
+— a much bigger file, and what you want when migrating to an instance that has
+never seen these datasets.
+
+**Import** is the button next to **Create A/B Test**. The imported test is
+always created fresh: it's a **draft**, owned by you, and nothing existing is
+ever overwritten — if the name is taken, the copy is created as
+`<name> (imported)`. Import resolves each dataset reference in order:
+
+1. A dataset with the same **content hash** exists → linked silently, it's the
+   same data.
+2. Only the **name** matches (contents differ) → import stops and asks you to
+   confirm. Linking by name lets the test open, but analysis may not reproduce
+   exactly, so it's your call rather than a silent guess.
+3. The archive carries a **snapshot** → the dataset is recreated, owned by you.
+4. None of the above → the import still succeeds, with a warning that the
+   dataset wasn't found and re-analysis is unavailable until you relink it.
+
+Both export and import are recorded in the audit log. An archive produced by a
+*newer* version of ABSet is refused with a clear message rather than
+half-read — upgrade the instance and try again.
+
 ### Roles
 
 | Role | Can do |
 |---|---|
 | **Viewer** | See experiments/reports they have access to, download reports |
-| **Editor** | Everything a Viewer can, plus create experiments and run Design/Analyze/Validation on any experiment they can see |
+| **Editor** | Everything a Viewer can, plus create experiments and run Design/Analyze/Validation on any experiment they can see, and export/import tests |
 | **Admin** | Everything, plus manage users, see the full audit log, and configure Database Connections |
 
 On top of the base role, an experiment has an **owner** (its creator) and can

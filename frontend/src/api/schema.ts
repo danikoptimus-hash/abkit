@@ -134,6 +134,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/experiments/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Experiment
+         * @description Импорт эксперимента из zip (пакет export/import). Литеральный путь
+         *     объявлен ДО `/{name}`-маршрутов — тем же соображением, что и
+         *     /bulk-delete.
+         *
+         *     Все четыре отказа архива — 400 с РАЗНЫМИ кодами: фронту нужно отличить
+         *     "нужно подтверждение" (переспросить и повторить) от "архив новее нас"
+         *     (тупик, чинится только апгрейдом) и от "это не наш zip".
+         */
+        post: operations["import_experiment_api_v1_experiments_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/experiments/bulk-delete": {
         parameters: {
             query?: never;
@@ -241,6 +267,34 @@ export interface paths {
          *     silently dropped.
          */
         post: operations["bulk_move_folder_api_v1_experiments_bulk_move_folder_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/experiments/{name}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Experiment
+         * @description Экспорт эксперимента одним zip (пакет export/import).
+         *
+         *     Гейт — ровно тот же двухчастный, что у Analyze/Validate (CLAUDE.md,
+         *     "Permissions model"): роль (Editor+) — депендой, видимость —
+         *     `_visible_or_404` здесь; владения/гранта не требуется, экспорт — чтение.
+         *
+         *     Собирается синхронно, не job'ом: архив уходит в тело ответа, а job'ы тут
+         *     возвращают только маленький JSON-результат (контракт JobRunner) — гонять
+         *     zip через `jobs.result_ref` было бы натягиванием совы на глобус.
+         */
+        get: operations["export_experiment_api_v1_experiments__name__export_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1602,6 +1656,16 @@ export interface components {
              */
             updated_at: string;
         };
+        /** Body_import_experiment_api_v1_experiments_import_post */
+        Body_import_experiment_api_v1_experiments_import_post: {
+            /**
+             * Confirm Dataset Names
+             * @default false
+             */
+            confirm_dataset_names: boolean;
+            /** File */
+            file: string;
+        };
         /** Body_post_flow_image_api_v1_experiments__name__flow_images_post */
         Body_post_flow_image_api_v1_experiments__name__flow_images_post: {
             /** Group Name */
@@ -2308,6 +2372,27 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * ImportExperimentResult
+         * @description POST /experiments/import. `renamed` — имя в архиве было занято, тест
+         *     создан под `experiment_name` (ExperimentSummary.name адресует тест, так
+         *     что фронту нужно именно новое имя, а не то, что лежало в архиве).
+         *     `warnings` — непустой список означает "импорт УДАЛСЯ, но с оговорками"
+         *     (обычно: датасет не нашелся, переанализ недоступен), а не провал.
+         */
+        ImportExperimentResult: {
+            /** Experiment Name */
+            experiment_name: string;
+            /** Original Name */
+            original_name: string;
+            /** Renamed */
+            renamed: boolean;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: string[];
         };
         /** JobAccepted */
         JobAccepted: {
@@ -3250,6 +3335,41 @@ export interface operations {
             };
         };
     };
+    import_experiment_api_v1_experiments_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_experiment_api_v1_experiments_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportExperimentResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bulk_delete_experiments_api_v1_experiments_bulk_delete_post: {
         parameters: {
             query?: never;
@@ -3492,6 +3612,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BulkMoveFolderResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_experiment_api_v1_experiments__name__export_get: {
+        parameters: {
+            query?: {
+                include_datasets?: boolean;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

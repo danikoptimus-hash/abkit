@@ -1550,3 +1550,496 @@ def _regenerate_design_report(exp_row, all_images) -> None:
         report_path.write_text(render_flow_images_section(html, grouped), encoding="utf-8")
     except Exception:
         log.error("regenerate_design_report.failed", exc_info=True, experiment=exp_row.name)
+
+
+# --------------------------------------------------------------------------
+# Экспорт/импорт эксперимента zip-архивом (пакет export/import)
+#
+# Чтение/запись самого архива — abkit/exchange.py (чистые байты <-> структуры,
+# без БД). Здесь — оркестрация: репозитории, права, audit_log.
+# --------------------------------------------------------------------------
+
+
+class DatasetNameMatchConfirmationRequired(Exception):
+    """Импорт: датасет из архива не нашелся по sha256 содержимого, но нашелся
+    по ИМЕНИ — то есть в этом экземпляре лежит файл с тем же именем и ДРУГИМ
+    содержимым. Молча слинковать его нельзя (анализ поехал бы по данным,
+    которых экспортер не видел), молча пропустить — тоже (пользователь ждет
+    рабочий тест). Поэтому — тот же паттерн, что у DatasetInUseError:
+    исключение с деталями, роутер маппит в 400 confirmation_required, фронт
+    показывает список и переспрашивает.
+
+    Бросается ДО создания эксперимента (см. run_import_experiment) — повторный
+    вызов с confirm_dataset_names=True не должен натыкаться на полусозданный
+    объект от первой попытки."""
+
+    def __init__(self, dataset_names: list[str]) -> None:
+        self.dataset_names = dataset_names
+        super().__init__(
+            "These datasets match an existing dataset by name but not by content: "
+            + ", ".join(dataset_names)
+        )
+
+
+def _utcnow():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
+
+
+def _parse_dt(value):
+    """ISO-строка из архива -> datetime; None/мусор -> None (импорт не должен
+    падать из-за неразобранной даты — она не несущая)."""
+    from datetime import datetime
+
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _experiment_dataset_refs(exp_row) -> list[dict[str, Any]]:
+    """Датасеты эксперимента -> ссылки для архива (имя + sha256 содержимого).
+
+    Объединяет оба источника связи: experiment_datasets (актуальный,
+    many-to-many, с kind) и legacy datasets.experiment_id ("primary/first-use",
+    CLAUDE.md) — иначе тест, у которого связь есть только в старом поле,
+    экспортировался бы без единой ссылки на данные."""
+    from abkit.db.repositories import DatasetRepo, ExperimentDatasetRepo
+
+    kind_by_dataset: dict[uuid_mod.UUID, str] = {}
+    for link in ExperimentDatasetRepo().list_for_experiment(exp_row.id):
+        kind_by_dataset.setdefault(link.dataset_id, link.kind)
+    for ds in DatasetRepo().list_for_experiment(exp_row.id):
+        kind_by_dataset.setdefault(ds.id, ds.kind)
+
+    refs: list[dict[str, Any]] = []
+    for dataset_id, kind in kind_by_dataset.items():
+        ds = DatasetRepo().get_by_id(dataset_id)
+        if ds is None:
+            continue
+        refs.append(
+            {
+                "filename": ds.filename,
+                "sha256": ds.sha256,
+                "kind": kind,
+                "source": ds.source,
+                "n_rows": ds.n_rows,
+                "columns": ds.columns,
+            }
+        )
+    return refs
+
+
+def run_export_experiment(
+    current_user: CurrentUser, name: str, *, include_datasets: bool = False
+) -> tuple[str, bytes]:
+    """GET /experiments/{name}/export -> (filename, zip-байты).
+
+    Права: Editor+ на любой ВИДИМЫЙ ему тест — то же правило и та же его
+    реализация, что у Analyze/Validate (CLAUDE.md, "Permissions model"):
+    роль проверяется здесь, видимость — гейтом `_visible_or_404` в роутере, до
+    вызова. Владения/гранта не требуется: экспорт — чтение, а прочитать этот
+    тест пользователь и так может.
+    """
+    require_role(current_user, "editor")
+
+    import abkit
+    from abkit.dataset_files import read_dataset_file
+    from abkit.db.repositories import (
+        AssignmentRepo,
+        BlockRepo,
+        DatasetRepo,
+        ExperimentTagRepo,
+        ResultRepo,
+    )
+    from abkit.db.store import DbExperimentStore
+    from abkit.exchange import (
+        EXPORT_FORMAT_VERSION,
+        REPORT_FILENAMES,
+        dataframe_to_parquet_bytes,
+        write_archive,
+    )
+
+    exp_row = _get_experiment_row(name)
+
+    with _timed("export_experiment", user=current_user.email, experiment=name):
+        blocks = BlockRepo().list_for_experiment(exp_row.id)
+        tags = ExperimentTagRepo().list_for_experiment(exp_row.id)
+        dataset_refs = _experiment_dataset_refs(exp_row)
+
+        # split_source живет внутри config (DesignConfig) — отдельным полем
+        # рядом НЕ дублируем: "external-split declaration" из ТЗ — это оно и
+        # есть, а два источника одной правды разъезжаются.
+        config = exp_row.config or {}
+        is_external_split = config.get("split_source") == "external"
+
+        assignments = None
+        if not is_external_split:
+            assignments = AssignmentRepo().load(exp_row.id)
+
+        experiment_payload = {
+            "name": exp_row.name,
+            "config": config,
+            "design_summary": exp_row.design_summary,
+            "status": exp_row.status,
+            "publication_status": exp_row.publication_status,
+            "visible_roles": exp_row.visible_roles,
+            "created_at": exp_row.created_at,
+            "started_at": exp_row.started_at,
+            "completed_at": exp_row.completed_at,
+            "archived_at": exp_row.archived_at,
+            "tags": [t.name for t in tags],
+            "blocks": [
+                {
+                    "kind": b.kind,
+                    "title": b.title,
+                    "content_md": b.content_md,
+                    "position": b.position,
+                }
+                for b in blocks
+            ],
+            "datasets": dataset_refs,
+        }
+
+        analysis_results = [
+            {
+                "results": r.results,
+                "dataset_filename": r.dataset_filename,
+                "created_at": r.created_at,
+            }
+            for r in ResultRepo().list_for_experiment(exp_row.id)
+        ]
+
+        artifact_dir = DbExperimentStore().data_dir / exp_row.name
+        reports: dict[str, bytes] = {}
+        for report_name in REPORT_FILENAMES:
+            report_path = artifact_dir / report_name
+            if report_path.exists():
+                reports[report_name] = report_path.read_bytes()
+
+        dataset_snapshots: dict[str, bytes] = {}
+        if include_datasets:
+            for ref in dataset_refs:
+                ds = next(
+                    (
+                        d
+                        for d in DatasetRepo().list_all()
+                        if d.sha256 == ref["sha256"] and d.filename == ref["filename"]
+                    ),
+                    None,
+                )
+                if ds is None:
+                    continue
+                try:
+                    frame = read_dataset_file(ds.storage_path)
+                except OSError:
+                    # Файл датасета исчез с диска — не повод завалить весь
+                    # экспорт: ссылка (имя + sha256) в архиве остается, просто
+                    # без снапшота.
+                    log.warning(
+                        "export_experiment.dataset_snapshot_missing",
+                        experiment=name,
+                        dataset=ds.filename,
+                    )
+                    continue
+                dataset_snapshots[ref["sha256"]] = dataframe_to_parquet_bytes(frame)
+
+        manifest = {
+            "format_version": EXPORT_FORMAT_VERSION,
+            "app_version": abkit.__version__,
+            "exported_at": _utcnow(),
+            "exported_by": current_user.email,
+            "experiment_name": exp_row.name,
+            "includes_dataset_snapshots": bool(dataset_snapshots),
+        }
+
+        raw = write_archive(
+            manifest=manifest,
+            experiment=experiment_payload,
+            assignments=assignments,
+            analysis_results=analysis_results,
+            reports=reports,
+            dataset_snapshots=dataset_snapshots,
+        )
+
+    _audit(
+        current_user,
+        "experiment.export",
+        object_type="experiment",
+        object_id=str(exp_row.id),
+        object_name=name,
+        details={
+            "include_datasets": include_datasets,
+            "dataset_snapshots": len(dataset_snapshots),
+            "size_bytes": len(raw),
+        },
+    )
+    return f"{exp_row.name}_export.zip", raw
+
+
+def _unique_experiment_name(original: str) -> str:
+    """Имя свободно -> как есть; занято -> "<name> (imported)"; занято и оно ->
+    "<name> (imported 2)" и далее. Имя эксперимента уникально на уровне БД и
+    служит адресом (CLAUDE.md, "Известный техдолг"), так что импорт обязан
+    развести коллизию сам, а не упасть."""
+    from abkit.db.repositories import ExperimentRepo
+
+    repo = ExperimentRepo()
+    if repo.get_by_name(original) is None:
+        return original
+    candidate = f"{original} (imported)"
+    if repo.get_by_name(candidate) is None:
+        return candidate
+    suffix = 2
+    while repo.get_by_name(f"{original} (imported {suffix})") is not None:
+        suffix += 1
+    return f"{original} (imported {suffix})"
+
+
+def _plan_dataset_links(contents, confirm_dataset_names: bool) -> tuple[list[dict[str, Any]], list[str]]:
+    """Решает, что делать с каждой ссылкой на датасет, НЕ трогая БД на запись.
+
+    Порядок разрешения (ТЗ): sha256 -> имя (с подтверждением) -> снапшот из
+    архива -> предупреждение. Возвращает (план, warnings); бросает
+    DatasetNameMatchConfirmationRequired, если нужен ответ пользователя.
+    Вызывается ДО создания эксперимента — отказ на этом шаге не должен
+    оставлять за собой полусозданный тест."""
+    from abkit.db.repositories import DatasetRepo
+
+    existing = DatasetRepo().list_all()
+    by_sha = {d.sha256: d for d in existing}
+
+    plan: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    pending_name_matches: list[str] = []
+
+    for ref in contents.experiment.get("datasets", []) or []:
+        filename = ref.get("filename") or "(unnamed)"
+        sha256 = ref.get("sha256")
+        kind = ref.get("kind") or "pre_design"
+
+        matched = by_sha.get(sha256) if sha256 else None
+        if matched is not None:
+            plan.append({"action": "link", "dataset_id": matched.id, "kind": kind})
+            continue
+
+        name_match = next((d for d in existing if d.filename == filename), None)
+        if name_match is not None:
+            if not confirm_dataset_names:
+                pending_name_matches.append(filename)
+                continue
+            plan.append({"action": "link", "dataset_id": name_match.id, "kind": kind})
+            warnings.append(
+                f"Dataset '{filename}' was linked by name — its contents differ from the "
+                f"exported dataset, so analysis results may not reproduce exactly."
+            )
+            continue
+
+        snapshot = contents.dataset_snapshots.get(sha256) if sha256 else None
+        if snapshot is not None:
+            plan.append({"action": "create", "ref": ref, "snapshot": snapshot, "kind": kind})
+            continue
+
+        warnings.append(
+            f"Dataset '{filename}' was not found in this instance and the archive carries "
+            f"no snapshot of it — re-analysis is unavailable until it is relinked."
+        )
+
+    if pending_name_matches:
+        raise DatasetNameMatchConfirmationRequired(pending_name_matches)
+
+    return plan, warnings
+
+
+def _create_dataset_from_snapshot(current_user: CurrentUser, ref: dict[str, Any], snapshot: bytes, kind: str):
+    """Снапшот из архива -> новый датасет, владелец — импортирующий.
+
+    Файл на диске ВСЕГДА пишется с расширением .parquet, даже если
+    ref["filename"] == "data.csv": read_dataset_file (abkit/dataset_files.py)
+    выбирает парсер ПО РАСШИРЕНИЮ storage_path, так что parquet-байты под
+    именем .csv молча уехали бы в pd.read_csv. Отображаемое имя
+    (datasets.filename) при этом сохраняем исходным — оно к чтению файла
+    отношения не имеет."""
+    import io
+    from pathlib import Path
+
+    from abkit.db.repositories import DatasetRepo
+    from abkit.db.store import DbExperimentStore
+
+    frame = pd.read_parquet(io.BytesIO(snapshot))
+    filename = ref.get("filename") or "imported.parquet"
+    stem = Path(filename).stem or "imported"
+    dest_dir = DbExperimentStore().data_dir / "_uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / f"{uuid_mod.uuid4().hex}_{stem}.parquet"
+    frame.to_parquet(dest_path, index=False)
+
+    return DatasetRepo().create(
+        kind=kind,
+        filename=filename,
+        n_rows=len(frame),
+        columns=list(frame.columns),
+        storage_path=str(dest_path),
+        # Считаем заново по фактически записанным данным, а не копируем
+        # ref["sha256"]: sha должна описывать то, что реально лежит на диске.
+        # На честном round-trip'е это одно и то же значение.
+        sha256=DatasetRepo.compute_sha256(frame),
+        uploaded_by=uuid_mod.UUID(current_user.id),
+        source="upload",
+    )
+
+
+def _restore_blocks(experiment_id: uuid_mod.UUID, blocks: list[dict[str, Any]], updated_by) -> None:
+    """Блоки из архива поверх дефолтных.
+
+    ExperimentRepo.create() уже создала hypothesis/conclusion/decision, а
+    BlockRepo.upsert_many() создает НОВУЮ строку, если id не передан — без
+    сопоставления по kind импорт получил бы по два блока каждого вида."""
+    from abkit.db.repositories import BlockRepo
+
+    existing_by_kind = {b.kind: b for b in BlockRepo().list_for_experiment(experiment_id)}
+    payload: list[dict[str, Any]] = []
+    for position, block in enumerate(blocks):
+        kind = block.get("kind") or "custom"
+        match = existing_by_kind.get(kind) if kind != "custom" else None
+        payload.append(
+            {
+                "id": str(match.id) if match is not None else None,
+                "kind": kind,
+                "title": block.get("title") or "",
+                "content_md": block.get("content_md") or "",
+                "position": block.get("position", position),
+            }
+        )
+    if payload:
+        BlockRepo().upsert_many(experiment_id, payload, updated_by=updated_by)
+
+
+def run_import_experiment(
+    current_user: CurrentUser, raw: bytes, *, confirm_dataset_names: bool = False
+) -> dict[str, Any]:
+    """POST /experiments/import — Editor+. Всегда создает НОВЫЙ эксперимент
+    (никогда не перезаписывает существующий): publication=draft, владелец —
+    импортирующий, конфликт имени -> "<name> (imported)".
+
+    Восстанавливается: config, блоки, теги, назначения, прогоны анализа,
+    отчеты. Операционный статус и даты жизненного цикла переносятся как есть,
+    а created_at — специально ИЗ АРХИВА, а не now(): design_report.html
+    копируется в архиве побайтово и уже содержит исходную дату в шапке, так
+    что "created" в UI и в отчете иначе разъехались бы."""
+    require_role(current_user, "editor")
+
+    from abkit.db.repositories import (
+        AssignmentRepo,
+        ExperimentDatasetRepo,
+        ExperimentRepo,
+        ExperimentTagRepo,
+        ResultRepo,
+        TagRepo,
+    )
+    from abkit.db.store import DbExperimentStore
+    from abkit.exchange import read_archive
+
+    contents = read_archive(raw)
+    payload = contents.experiment
+
+    original_name = payload.get("name")
+    if not original_name or not isinstance(original_name, str):
+        from abkit import storage
+
+        raise storage.StorageError("experiment.json has no valid 'name'")
+
+    status = payload.get("status") or "designed"
+    if status not in ("designed", "running", "completed", "archived"):
+        status = "designed"
+
+    # До первой записи в БД: план по датасетам может потребовать подтверждения,
+    # и тогда ничего создано быть не должно.
+    plan, warnings = _plan_dataset_links(contents, confirm_dataset_names)
+
+    name = _unique_experiment_name(original_name)
+    importer_id = uuid_mod.UUID(current_user.id)
+
+    with _timed("import_experiment", user=current_user.email, experiment=name):
+        exp_row = ExperimentRepo().create(
+            name=name,
+            owner_id=importer_id,
+            status=status,
+            config=payload.get("config") or {},
+            design_summary=payload.get("design_summary"),
+            # Всегда draft, каким бы ни был экспортированный тест: импортер не
+            # должен нечаянно опубликовать чужой тест самим фактом импорта.
+            publication_status="draft",
+            created_at=_parse_dt(payload.get("created_at")),
+            started_at=_parse_dt(payload.get("started_at")),
+            completed_at=_parse_dt(payload.get("completed_at")),
+            archived_at=_parse_dt(payload.get("archived_at")),
+        )
+
+        visible_roles = payload.get("visible_roles")
+        if visible_roles:
+            ExperimentRepo().update_visible_roles(name, visible_roles)
+
+        if contents.assignments is not None and not contents.assignments.empty:
+            AssignmentRepo().bulk_insert(exp_row.id, contents.assignments)
+
+        _restore_blocks(exp_row.id, payload.get("blocks") or [], importer_id)
+
+        tag_names = [t for t in (payload.get("tags") or []) if isinstance(t, str) and t.strip()]
+        if tag_names:
+            tag_ids = [
+                TagRepo().get_or_create(t.strip(), created_by=importer_id).id for t in tag_names
+            ]
+            ExperimentTagRepo().set_for_experiment(exp_row.id, tag_ids)
+
+        artifact_dir = DbExperimentStore().data_dir / name
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        for report_name, report_bytes in contents.reports.items():
+            (artifact_dir / report_name).write_bytes(report_bytes)
+
+        for item in plan:
+            if item["action"] == "link":
+                dataset_id = item["dataset_id"]
+            else:
+                dataset_id = _create_dataset_from_snapshot(
+                    current_user, item["ref"], item["snapshot"], item["kind"]
+                )
+            ExperimentDatasetRepo().link(exp_row.id, dataset_id, item["kind"])
+
+        report_path = str(artifact_dir / "report.html")
+        for run in contents.analysis_results:
+            results = run.get("results")
+            if not isinstance(results, dict):
+                continue
+            ResultRepo().create(
+                experiment_id=exp_row.id,
+                results=results,
+                report_path=report_path,
+                dataset_filename=run.get("dataset_filename"),
+                created_by=importer_id,
+            )
+
+    _audit(
+        current_user,
+        "experiment.import",
+        object_type="experiment",
+        object_id=str(exp_row.id),
+        object_name=name,
+        details={
+            "original_name": original_name,
+            "renamed": name != original_name,
+            "source_app_version": contents.manifest.get("app_version"),
+            "format_version": contents.manifest.get("format_version"),
+            "warnings": len(warnings),
+        },
+    )
+
+    return {
+        "experiment_name": name,
+        "original_name": original_name,
+        "renamed": name != original_name,
+        "warnings": warnings,
+    }

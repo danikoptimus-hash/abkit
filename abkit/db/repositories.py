@@ -757,6 +757,23 @@ class ResultRepo:
                 s.expunge(r)
             return r
 
+    def list_for_experiment(self, experiment_id: uuid_mod.UUID) -> list[AnalysisResult]:
+        """Все прогоны анализа, старейший первым (в отличие от
+        latest_for_experiment, которой хватает вкладке Results). Нужен
+        экспорту (abkit/exchange.py): архив везет ВСЮ историю анализов, а не
+        только последний — иначе импорт молча терял бы прогоны."""
+        with session_scope() as s:
+            rows = list(
+                s.scalars(
+                    select(AnalysisResult)
+                    .where(AnalysisResult.experiment_id == experiment_id)
+                    .order_by(AnalysisResult.created_at)
+                )
+            )
+            for r in rows:
+                s.expunge(r)
+            return rows
+
     def count_for_experiment(self, experiment_id: uuid_mod.UUID) -> int:
         with session_scope() as s:
             return (

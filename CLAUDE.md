@@ -321,6 +321,75 @@ create/edit user, Settings → Database Connections modal. Не подключе
 
 Тесты: `tests/test_db_connections_core.py`, `backend/tests/test_db_connections.py`, `tests/test_sql_guard.py`, `tests/test_sql_dataset_core.py`, `tests/test_sql_parsing.py` (Python-порт `parseSchemaTableFromSql`, используемый миграцией 0010), `backend/tests/test_dataset_from_sql.py`, `tests/test_experiment_dataset_repo.py`, `backend/tests/test_experiment_datasets_link.py` — все против `testcontainers-postgres` (реальная БД, не моки), см. `feedback` в общем описании тестов выше. E2E: `frontend/e2e/database-connections.spec.ts` (полный цикл: создать подключение → test → preview SQL → создать датасет → дизайн на нем; тест на Edit — каскад предзаполнен из сохраненного SQL, обе вкладки превью, "Preview query result" отражает несохраненную правку, плюс проверка JOIN-запроса → пустой каскад с подсказкой; тест на создание через каскад → `source_schema`/`source_table` реально сохранены в БД и предзаполнены в Edit БЕЗ повторного парсинга), `frontend/e2e/datasets-page.spec.ts`, `frontend/e2e/dataset-management.spec.ts` (Edit/Delete/поиск на source=upload, включая снапшот-превью без Connection/SQL).
 
+## Экспорт/импорт эксперимента (zip-архив)
+
+Перенос теста между инстансами (и клонирование внутри одного). Никаких новых
+таблиц/миграций — фича целиком поверх существующей модели.
+
+**Раздел ответственности**: `abkit/exchange.py` — ТОЛЬКО чтение/запись архива
+(bytes <-> структуры), без единого обращения к БД (тестируется без
+testcontainers — `tests/test_exchange.py`); `abkit/jobs.py::run_export_experiment`/
+`run_import_experiment` — оркестрация (репозитории, права, audit_log), тесты
+против реальной БД через API — `backend/tests/test_experiment_export_import.py`.
+Тот же раздел, что у `abkit/flow_images.py` (чистая валидация) и jobs.py.
+
+**Формат** (`<experiment-name>_export.zip`): `manifest.json` (`format_version`,
+версия приложения, `exported_at`), `experiment.json` (config, блоки, теги,
+статусы, ссылки на датасеты), `assignments.parquet` (только ABSet-сплит —
+у external его нет по построению, `config.split_source`; назначения лежат в
+ТАБЛИЦЕ `assignments`, не в parquet на диске, см. `abkit/db/store.py` —
+экспорт читает `AssignmentRepo.load()` и сериализует, импорт делает
+`bulk_insert`), `analysis_results.json` (ВСЕ прогоны — ради этого добавлен
+`ResultRepo.list_for_experiment()`, до того была только
+`latest_for_experiment`), `reports/`, `datasets/<sha256>.parquet` (только с
+галочкой «Include dataset snapshots»).
+
+`EXPORT_FORMAT_VERSION` растет только при НЕСОВМЕСТИМОМ изменении; архив
+новее поддерживаемого — осознанный отказ (400 `unsupported_format_version`),
+старее — читается как есть (новые поля всегда опциональны).
+
+**Безопасность**: архив приходит от пользователя, а `reports/` пишутся на
+диск. `zipfile` НЕ нормализует имена (`namelist()` отдает
+`reports/../../../etc/passwd` дословно — проверено), поэтому
+`_safe_member()` явно ОТКЛОНЯЕТ traversal (а не молча берет basename — честный
+экспорт таких имен не производит, значит архив битый или враждебный), плюс
+белый список `REPORT_FILENAMES`. Неизвестные записи (README архиватора и т.п.)
+— игнорируются, не фатальны.
+
+**Права**: экспорт — Editor+ на ЛЮБОЙ ВИДИМЫЙ тест, владения/гранта не нужно
+(экспорт — чтение). Гейт двухчастный, ровно как у Analyze/Validate: роль —
+`require_min_role("editor")` депендой + `require_role` в jobs, видимость —
+`_visible_or_404` в роутере. Следствие для UI: в колонке Actions списка
+Export гейтится РОЛЬЮ, а остальные кнопки — `record.can_edit`; поэтому колонка
+рендерится при `record.can_edit || canExport`, а «⋯» на странице теста — при
+`canEdit || canExport`.
+
+**Импорт**: всегда НОВЫЙ тест (никогда не перезапись), `publication=draft`
+принудительно, владелец — импортирующий, конфликт имени → `<name> (imported)`
+→ `(imported 2)`... `created_at` восстанавливается ИЗ АРХИВА, а не `now()`:
+`design_report.html` копируется побайтово и уже содержит исходную дату в
+шапке — иначе UI и отчет разъехались бы. Блоки сопоставляются ПО `kind` с
+дефолтными (их создает `ExperimentRepo.create()`), иначе `upsert_many` без id
+создал бы по второму hypothesis/conclusion/decision.
+
+**Разрешение ссылок на датасеты** (`_plan_dataset_links`, порядок из ТЗ):
+sha256 → имя (с подтверждением) → снапшот из архива → предупреждение
+(«re-analysis unavailable until relinked» — импорт при этом УДАЕТСЯ). План
+считается ДО создания эксперимента: `DatasetNameMatchConfirmationRequired`
+(400 `confirmation_required`, тот же паттерн, что `DatasetInUseError`) не
+должен оставлять за собой полусозданный тест. **Ловушка**: снапшот пишется на
+диск ВСЕГДА с расширением `.parquet`, даже когда `datasets.filename` —
+`data.csv`: `read_dataset_file` выбирает парсер ПО РАСШИРЕНИЮ `storage_path`,
+так что parquet-байты под именем `.csv` молча уехали бы в `pd.read_csv`.
+
+**Frontend**: `components/ExportExperimentModal.tsx` (галочка снапшотов;
+скачивание через fetch+blob, а НЕ `<Button href>` как у отчетов/samples —
+экспорт умеет отказать 403/404, а у href-навигации отказ выглядит как «ничего
+не произошло»), `components/ImportExperimentModal.tsx` (файл копится в
+состоянии — повтор с `confirm=true` должен слать ТОТ ЖЕ файл, а не просить
+перевыбрать; успех с warnings — баннер, а не ошибка). E2E:
+`frontend/e2e/export-import.spec.ts`.
+
 ## Папки для A/B тестов
 
 Простая одноуровневая группировка тестов в список — сознательно НЕ дерево (подпапок в v1 нет, решение зафиксировано, не забытая фича). У Superset нет собственного понятия "папка" для дашбордов/чартов (только теги, см. выше) — ближайшая существующая в проекте аналогия не оттуда, а левая filter-панель, уже применяемая в этом приложении для одиночного (не AND-комбинируемого) сужения списка; папки взяли этот же паттерн, а не паттерн чипов у тегов, потому что членство в папке — одно-к-одному (тест лежит ровно в одной папке или нигде), а не пересекающиеся ярлыки.

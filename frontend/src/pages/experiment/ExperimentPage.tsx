@@ -4,11 +4,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Typography, Tag, Button, Spin, Result, message, Input, Dropdown, Tooltip, Tabs, Space, Modal } from 'antd'
 import {
   EditOutlined, SaveOutlined, CloseOutlined, MoreOutlined, DeleteOutlined, SettingOutlined, ExperimentOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons'
 import { apiClient, errorMessage } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
+import { useAuth, hasMinRole } from '../../auth/AuthContext'
 import { DeleteExperimentModal } from '../../components/DeleteExperimentModal'
 import { ExperimentPropertiesModal } from '../../components/ExperimentPropertiesModal'
+import { ExportExperimentModal } from '../../components/ExportExperimentModal'
 import { LifecycleDates } from '../../components/LifecycleDates'
 import { RelativeTime } from '../../components/RelativeTime'
 import { TagList } from '../../components/TagBadge'
@@ -135,6 +138,7 @@ export function ExperimentPage() {
   const { name } = useParams<{ name: string }>()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [editing, setEditing] = useState(false)
@@ -149,6 +153,7 @@ export function ExperimentPage() {
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [propertiesTarget, setPropertiesTarget] = useState<string | null>(null)
+  const [exportTarget, setExportTarget] = useState<string | null>(null)
 
   const rawTab = searchParams.get('tab')
   const activeTab: TabKey = TAB_KEYS.includes(rawTab as TabKey) ? (rawTab as TabKey) : 'design'
@@ -336,6 +341,10 @@ export function ExperimentPage() {
   if (error || !data || !name) return <Result status="404" title="Experiment not found" />
 
   const canEdit = data.can_edit
+  // Экспорт не требует прав на правку (пакет export/import): Editor+ может
+  // выгрузить любой тест, который видит, а видимость этой страницы уже
+  // проверена сервером — до сюда невидимый тест не доезжает (404 выше).
+  const canExport = hasMinRole(user, 'editor')
 
   const displayBlocks = editing ? draftBlocks : (blocks ?? []).map((b) => ({ ...b }))
   const hypothesisBlock = displayBlocks.find((b) => b.kind === 'hypothesis')
@@ -374,21 +383,32 @@ export function ExperimentPage() {
         />
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {canEdit && !editing && (
+          {(canEdit || canExport) && !editing && (
             <Dropdown
               menu={{
                 items: [
-                  { key: 'properties', icon: <SettingOutlined />, label: 'Edit Properties', onClick: () => setPropertiesTarget(name) },
+                  // Export — по роли (Editor+ на видимый тест), а не по
+                  // canEdit: экспорт это чтение (пакет export/import).
+                  // Поэтому и сам "⋯" показывается, когда доступен хотя бы
+                  // экспорт, а не только при праве на правку.
+                  ...(canExport
+                    ? [{ key: 'export', icon: <DownloadOutlined />, label: 'Export', onClick: () => setExportTarget(name) }]
+                    : []),
+                  ...(canEdit
+                    ? [{ key: 'properties', icon: <SettingOutlined />, label: 'Edit Properties', onClick: () => setPropertiesTarget(name) }]
+                    : []),
                   // Redesigning a running (or later) experiment is a
                   // methodological disaster (5-part package pt.3.4) — the
                   // item is absent, not just disabled, once past 'designed'.
                   // Also absent for external-split experiments (item 12) —
                   // Redesign's wizard flow assumes a dataset, which
                   // external experiments never have.
-                  ...(data.status === 'designed' && data.config.split_source !== 'external'
+                  ...(canEdit && data.status === 'designed' && data.config.split_source !== 'external'
                     ? [{ key: 'redesign', icon: <ExperimentOutlined />, label: 'Redesign', onClick: startRedesign }]
                     : []),
-                  { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => setDeleteTarget(name) },
+                  ...(canEdit
+                    ? [{ key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => setDeleteTarget(name) }]
+                    : []),
                 ],
               }}
               trigger={['click']}
@@ -518,6 +538,8 @@ export function ExperimentPage() {
           }
         }}
       />
+
+      <ExportExperimentModal name={exportTarget} onCancel={() => setExportTarget(null)} />
     </div>
   )
 }

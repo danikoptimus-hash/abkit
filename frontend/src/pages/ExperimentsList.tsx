@@ -8,6 +8,8 @@ import {
   CheckSquareOutlined,
   CloseOutlined,
   FolderOutlined,
+  DownloadOutlined,
+  UploadOutlined,
 } from '@ant-design/icons'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { apiClient, errorMessage } from '../api/client'
@@ -24,6 +26,8 @@ import type { TagLike } from '../components/TagBadge'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { FolderPanel } from '../components/folders/FolderPanel'
 import { MoveToFolderModal } from '../components/folders/MoveToFolderModal'
+import { ExportExperimentModal } from '../components/ExportExperimentModal'
+import { ImportExperimentModal } from '../components/ImportExperimentModal'
 
 const STATUS_COLORS: Record<string, string> = {
   designed: 'default',
@@ -101,7 +105,14 @@ export function ExperimentsListPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [editTarget, setEditTarget] = useState<string | null>(null)
   const [moveTarget, setMoveTarget] = useState<string[] | null>(null)
+  const [exportTarget, setExportTarget] = useState<string | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const canCreate = hasMinRole(user, 'editor')
+  // Экспорт — Editor+ на любой ВИДИМЫЙ тест, владения не требует (пакет
+  // export/import): намеренно НЕ record.can_edit, в отличие от остальных
+  // действий строки — экспорт это чтение, а прочитать этот тест пользователь
+  // и так может, раз видит его в списке.
+  const canExport = hasMinRole(user, 'editor')
 
   // Bulk select (UX package, list п.E) — Superset-style: a toggle reveals a
   // checkbox column, selecting rows shows an action bar above the table.
@@ -207,6 +218,11 @@ export function ExperimentsListPage() {
               onClick={() => (bulkMode ? exitBulkMode() : setBulkMode(true))}
             >
               {bulkMode ? 'Cancel' : 'Bulk select'}
+            </Button>
+          )}
+          {canCreate && (
+            <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+              Import
             </Button>
           )}
           {canCreate && (
@@ -318,34 +334,54 @@ export function ExperimentsListPage() {
           {
             title: 'Actions',
             key: 'actions',
+            // Два РАЗНЫХ гейта в одной колонке: Export — по роли (canExport),
+            // остальное — по правам на конкретный тест (record.can_edit).
+            // Поэтому колонка рендерится, если доступно хоть что-то, а не
+            // "если can_edit", как было до пакета export/import.
             render: (_, record) =>
-              record.can_edit && (
+              (record.can_edit || canExport) && (
                 <Space className="hover-actions">
-                  <Tooltip title="Edit">
-                    <Button
-                      size="small"
-                      aria-label="Edit"
-                      icon={<EditOutlined />}
-                      onClick={() => setEditTarget(record.name)}
-                    />
-                  </Tooltip>
-                  <Tooltip title="Move to folder">
-                    <Button
-                      size="small"
-                      aria-label="Move to folder"
-                      icon={<FolderOutlined />}
-                      onClick={() => setMoveTarget([record.name])}
-                    />
-                  </Tooltip>
-                  <Tooltip title="Delete">
-                    <Button
-                      danger
-                      size="small"
-                      aria-label="Delete"
-                      icon={<DeleteOutlined />}
-                      onClick={() => setDeleteTarget(record.name)}
-                    />
-                  </Tooltip>
+                  {canExport && (
+                    <Tooltip title="Export">
+                      <Button
+                        size="small"
+                        aria-label="Export"
+                        icon={<DownloadOutlined />}
+                        onClick={() => setExportTarget(record.name)}
+                      />
+                    </Tooltip>
+                  )}
+                  {record.can_edit && (
+                    <Tooltip title="Edit">
+                      <Button
+                        size="small"
+                        aria-label="Edit"
+                        icon={<EditOutlined />}
+                        onClick={() => setEditTarget(record.name)}
+                      />
+                    </Tooltip>
+                  )}
+                  {record.can_edit && (
+                    <Tooltip title="Move to folder">
+                      <Button
+                        size="small"
+                        aria-label="Move to folder"
+                        icon={<FolderOutlined />}
+                        onClick={() => setMoveTarget([record.name])}
+                      />
+                    </Tooltip>
+                  )}
+                  {record.can_edit && (
+                    <Tooltip title="Delete">
+                      <Button
+                        danger
+                        size="small"
+                        aria-label="Delete"
+                        icon={<DeleteOutlined />}
+                        onClick={() => setDeleteTarget(record.name)}
+                      />
+                    </Tooltip>
+                  )}
                 </Space>
               ),
           },
@@ -388,6 +424,10 @@ export function ExperimentsListPage() {
           refreshList()
         }}
       />
+
+      <ExportExperimentModal name={exportTarget} onCancel={() => setExportTarget(null)} />
+
+      <ImportExperimentModal open={importOpen} onClose={() => setImportOpen(false)} />
       </div>
     </div>
   )

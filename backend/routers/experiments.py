@@ -45,6 +45,7 @@ from backend.schemas.experiments import (
     ExperimentPropertiesOut,
     ExperimentSummary,
     FileInfo,
+    ImportExperimentResult,
     PaginatedAudit,
     PaginatedExperiments,
     PatchExperimentRequest,
@@ -206,6 +207,36 @@ def list_experiments(
     return PaginatedExperiments(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.post("/import", response_model=ImportExperimentResult, status_code=201)
+def import_experiment(
+    confirm_dataset_names: bool = Form(default=False),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(require_min_role("editor")),
+) -> ImportExperimentResult:
+    """Импорт эксперимента из zip (пакет export/import). Литеральный путь
+    объявлен ДО `/{name}`-маршрутов — тем же соображением, что и
+    /bulk-delete.
+
+    Все четыре отказа архива — 400 с РАЗНЫМИ кодами: фронту нужно отличить
+    "нужно подтверждение" (переспросить и повторить) от "архив новее нас"
+    (тупик, чинится только апгрейдом) и от "это не наш zip"."""
+    from abkit.exchange import ExperimentExchangeError, UnsupportedFormatVersionError
+    from abkit.jobs import DatasetNameMatchConfirmationRequired, run_import_experiment
+
+    raw = file.file.read()
+    try:
+        result = run_import_experiment(user, raw, confirm_dataset_names=confirm_dataset_names)
+    except DatasetNameMatchConfirmationRequired as e:
+        raise APIError(
+            400, "confirmation_required", str(e), {"datasets": e.dataset_names}
+        ) from e
+    except UnsupportedFormatVersionError as e:
+        raise APIError(400, "unsupported_format_version", str(e)) from e
+    except ExperimentExchangeError as e:
+        raise APIError(400, "invalid_archive", str(e)) from e
+    return ImportExperimentResult(**result)
+
+
 @router.post("/bulk-delete", response_model=BulkDeleteResult)
 def bulk_delete_experiments(
     body: BulkDeleteRequest, user: CurrentUser = Depends(require_min_role("editor")),
@@ -359,6 +390,32 @@ def bulk_move_folder(
         except AuthError:
             skipped.append(BulkMoveFolderSkipped(name=name, reason="no permission"))
     return BulkMoveFolderResult(moved=moved, skipped=skipped)
+
+
+@router.get("/{name}/export")
+def export_experiment(
+    name: str,
+    include_datasets: bool = Query(default=False),
+    user: CurrentUser = Depends(require_min_role("editor")),
+) -> Response:
+    """Экспорт эксперимента одним zip (пакет export/import).
+
+    Гейт — ровно тот же двухчастный, что у Analyze/Validate (CLAUDE.md,
+    "Permissions model"): роль (Editor+) — депендой, видимость —
+    `_visible_or_404` здесь; владения/гранта не требуется, экспорт — чтение.
+
+    Собирается синхронно, не job'ом: архив уходит в тело ответа, а job'ы тут
+    возвращают только маленький JSON-результат (контракт JobRunner) — гонять
+    zip через `jobs.result_ref` было бы натягиванием совы на глобус."""
+    from abkit.jobs import run_export_experiment
+
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    filename, raw = run_export_experiment(user, exp.name, include_datasets=include_datasets)
+    return Response(
+        content=raw,
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition(filename)},
+    )
 
 
 @router.get("/{name}/reports/{report_name}")

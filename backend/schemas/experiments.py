@@ -135,6 +135,19 @@ class BulkDeleteResult(BaseModel):
     skipped: list[BulkDeleteSkipped]
 
 
+class ImportExperimentResult(BaseModel):
+    """POST /experiments/import. `renamed` — имя в архиве было занято, тест
+    создан под `experiment_name` (ExperimentSummary.name адресует тест, так
+    что фронту нужно именно новое имя, а не то, что лежало в архиве).
+    `warnings` — непустой список означает "импорт УДАЛСЯ, но с оговорками"
+    (обычно: датасет не нашелся, переанализ недоступен), а не провал."""
+
+    experiment_name: str
+    original_name: str
+    renamed: bool
+    warnings: list[str] = []
+
+
 class AnalyzeRequest(BaseModel):
     dataset_id: str
     correction: str = "holm"
