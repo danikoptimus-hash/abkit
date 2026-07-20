@@ -88,6 +88,9 @@ export interface SegmentEffect {
   effect_rel: number
   ci_rel: [number, number]
   n: Record<string, number>
+  // Segment-combinations package §1: fewer than 100 users in a group — the
+  // cell is greyed with an "underpowered" badge instead of a lift.
+  underpowered?: boolean
 }
 
 export interface DailyLiftPoint {
@@ -132,6 +135,12 @@ export interface ChartData {
   // External split rework (§3): dimension labels chosen ad-hoc at analyze
   // time (not declared as strata at design) — tagged in the segment section.
   ad_hoc_dimensions?: string[]
+  // Segment-combinations package §1: dimension labels that are cross-column
+  // combinations (country × platform).
+  combination_dimensions?: string[]
+  // Segment-combinations package §2: dimension labels appended post-hoc to a
+  // finished run — removable in the UI.
+  post_hoc_dimensions?: string[]
   metrics: Record<string, MetricChartData>
 }
 
@@ -139,6 +148,9 @@ export interface RunMeta {
   created_at: string
   dataset_filename: string | null
   run_number: number
+  // Segment-combinations package §2: live dataset id (null if deleted) — the
+  // Results tab needs it to compute a post-hoc segment cut.
+  dataset_id?: string | null
 }
 
 export interface AnalysisResultsOut {

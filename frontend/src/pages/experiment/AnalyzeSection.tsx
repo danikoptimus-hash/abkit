@@ -7,6 +7,7 @@ import { apiClient, errorMessage } from '../../api/client'
 import { queryKeys } from '../../api/queryKeys'
 import { useJobPolling } from '../../api/useJobPolling'
 import { DatasetSelect } from '../../components/DatasetSelect'
+import { SegmentCutPicker, type SegmentCuts } from '../../components/analysis/SegmentCutPicker'
 import { AnalyzeResults } from './AnalyzeResults'
 import { experimentResultsQueryKey, fetchExperimentResults } from './resultsQuery'
 import { methodOptions, recommendedMethodId } from './methodOptions'
@@ -78,12 +79,11 @@ export function AnalyzeSection({
 
   const [correction, setCorrection] = useState('holm')
   const [dateCol, setDateCol] = useState<string | undefined>(undefined)
-  // External split rework (§3): segment columns to break the effect down by,
-  // pre-filled with the design-declared strata. The user can add ANY column
-  // from the analysis dataset (ad-hoc segments — the analysis data may carry
-  // attributes not declared at design). Sent as segment_columns; the backend
-  // treats non-declared entries as ad-hoc and marks them in the report.
-  const [segmentColumns, setSegmentColumns] = useState<string[]>(declaredStrata)
+  // Segment cuts to break the effect down by — single columns (pre-filled
+  // with design-declared strata) AND cross-column combinations (§1). Sent as
+  // segment_columns / segment_combinations; non-declared singles are marked
+  // "ad-hoc" in the results.
+  const [segmentCuts, setSegmentCuts] = useState<SegmentCuts>({ columns: declaredStrata, combinations: [] })
   const showCorrection = family.familySize > 1
   const effectiveCorrection = showCorrection ? correction : 'none'
 
@@ -147,7 +147,7 @@ export function AnalyzeSection({
     setDateCol(undefined)
     setGroupColumn(undefined)
     setGroupMapping({})
-    setSegmentColumns(declaredStrata)
+    setSegmentCuts({ columns: declaredStrata, combinations: [] })
     reset()
     setPanelOverride(true)
   }
@@ -273,7 +273,8 @@ export function AnalyzeSection({
       body: {
         dataset_id: prepared.id, correction: effectiveCorrection,
         date_col: dateCol ?? null, methods,
-        segment_columns: segmentColumns.length > 0 ? segmentColumns : null,
+        segment_columns: segmentCuts.columns.length > 0 ? segmentCuts.columns : null,
+        segment_combinations: segmentCuts.combinations.length > 0 ? segmentCuts.combinations : null,
         ...(isExternal ? { group_column: groupColumn, group_mapping: groupMapping } : {}),
       },
     })
@@ -428,29 +429,25 @@ export function AnalyzeSection({
                 )}
               </div>
             )}
-            {/* External split rework (§3): segment columns — break the effect
-                down by any column in the analysis dataset. Pre-filled with the
-                design-declared strata; anything else the user adds is an
-                ad-hoc segment (marked as such in the report/results). */}
+            {/* Segments (§1): single columns + cross-column combinations to
+                break the effect down by, pre-filled with the design-declared
+                strata. Non-declared singles are "ad-hoc"; a combination's
+                live cell count is guarded (warn > 30, refuse > 200). */}
             {prepared && prepared.columns.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-                  Segment columns (optional)
+                  Segments (optional)
                 </Typography.Text>
-                <Select
-                  mode="multiple"
-                  style={{ width: '100%' }}
-                  placeholder="Break the effect down by these columns"
-                  value={segmentColumns}
-                  onChange={setSegmentColumns}
-                  options={prepared.columns.map((c) => ({ value: c, label: c }))}
+                <SegmentCutPicker
+                  datasetId={prepared.id}
+                  columns={prepared.columns}
+                  value={segmentCuts}
+                  onChange={setSegmentCuts}
                   disabled={running}
-                  aria-label="segment-columns-select"
                 />
                 <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
-                  Exploratory only (no multiple-testing correction).
-                  {segmentColumns.some((c) => !declaredStrata.includes(c)) &&
-                    ' Columns not declared at design are marked "ad-hoc" in the results.'}
+                  Exploratory only (no multiple-testing correction). Columns not declared at design are marked
+                  "ad-hoc" in the results.
                 </Typography.Paragraph>
               </div>
             )}

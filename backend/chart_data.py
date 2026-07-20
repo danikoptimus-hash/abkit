@@ -20,6 +20,7 @@ import pandas as pd
 from statsmodels.stats.proportion import proportion_confint
 
 from abkit.analysis.results import AnalysisResults
+from abkit.segments import UNDERPOWERED_MIN_N_PER_GROUP
 from abkit.viz.plots import p99_clip_stats
 
 _MAX_ECDF_POINTS = 200
@@ -246,6 +247,12 @@ def build_chart_data(results: AnalysisResults) -> dict[str, Any]:
                         # Stage 1 (chart tooltips): n per group, shown on hover —
                         # not otherwise displayed anywhere for segment rows.
                         "n": r.n,
+                        # Package §1: a cell with < UNDERPOWERED_MIN_N_PER_GROUP
+                        # users in ANY group is underpowered — the frontend
+                        # greys it and shows a badge instead of a (noisy) lift.
+                        "underpowered": bool(
+                            r.n and min(r.n.values()) < UNDERPOWERED_MIN_N_PER_GROUP
+                        ),
                     }
                     for stratum_name, r in seg_list
                 ]
@@ -311,5 +318,13 @@ def build_chart_data(results: AnalysisResults) -> dict[str, Any]:
         # at analyze time (not declared as strata at design) — the frontend/
         # report tag these "ad-hoc segment (not declared at design)".
         "ad_hoc_dimensions": list(context.get("ad_hoc_segment_dimensions", [])),
+        # Package §1: dimension labels that are cross-column combinations
+        # (country × platform) — self-evident from the " × " label, surfaced
+        # explicitly so the frontend can chip/label them without parsing.
+        "combination_dimensions": list(context.get("combination_segment_dimensions", [])),
+        # Package §2: post-hoc dimensions (cuts appended to a finished run) are
+        # marked here when merged into the stored payload (removable in the UI).
+        # Absent/empty on a fresh run.
+        "post_hoc_dimensions": list(context.get("post_hoc_segment_dimensions", [])),
         "metrics": chart_data,
     }

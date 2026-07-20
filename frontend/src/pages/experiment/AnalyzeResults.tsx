@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Typography, Tag, Space, Card, Alert, Row, Col, Segmented, Table } from 'antd'
+import { Typography, Tag, Space, Card, Alert, Row, Col } from 'antd'
 import { ForestPlotChart } from '../../charts/ForestPlotChart'
 import { DistributionChart } from '../../charts/DistributionChart'
 import { CumulativeLiftChart } from '../../charts/CumulativeLiftChart'
 import { formatPValue } from '../../charts/tooltip'
 import { HelpCollapse } from './HelpCollapse'
+import { StrataBalanceTable } from '../../components/analysis/StrataBalanceTable'
+import { SegmentBreakdown } from '../../components/analysis/SegmentBreakdown'
 import { colors } from '../../theme/tokens'
 import type { AnalysisResultsOut, TestResultOut } from './analyzeTypes'
 import { resultsByMetric, verdict } from './analyzeTypes'
@@ -119,6 +121,8 @@ export function AnalyzeResults({ data, alpha }: { data: AnalysisResultsOut; alph
   const { checks } = data.chart_data
   const strataBalance = data.chart_data.strata_balance
   const adHocDimensions = data.chart_data.ad_hoc_dimensions ?? []
+  const combinationDimensions = data.chart_data.combination_dimensions ?? []
+  const postHocDimensions = data.chart_data.post_hoc_dimensions ?? []
   const metricNames = Object.keys(byMetric)
 
   // Metric cards double as tabs here (UX-package: "аналитика раскрывается по
@@ -139,18 +143,6 @@ export function AnalyzeResults({ data, alpha }: { data: AnalysisResultsOut; alph
   const activeMetric = selectedMetric && metricNames.includes(selectedMetric) ? selectedMetric : metricNames[0]
   const metricResults = activeMetric ? byMetric[activeMetric] : undefined
   const metricChart = activeMetric ? data.chart_data.metrics[activeMetric] : undefined
-
-  // Item 3 (per-dimension segment analysis): "Segment by" switches which
-  // stratification dimension's breakdown the forest plots below show —
-  // each dimension alone (e.g. "gender"), or their combination (e.g.
-  // "gender × country") when there's more than one. Falls back to
-  // whichever dimension is first if the previous selection doesn't exist
-  // for this metric (dimensions are usually the same across metrics since
-  // strata are experiment-wide, but this stays safe either way).
-  const [segmentDimension, setSegmentDimension] = useState<string | null>(null)
-  const dimensionLabels = metricChart ? Object.keys(metricChart.segments_by_dimension) : []
-  const activeDimension =
-    segmentDimension && dimensionLabels.includes(segmentDimension) ? segmentDimension : dimensionLabels[0]
 
   return (
     <div>
@@ -179,28 +171,7 @@ export function AnalyzeResults({ data, alpha }: { data: AnalysisResultsOut; alph
       </Space>
       <HelpCollapse chartType="srm_table" table />
 
-      {strataBalance && (
-        <div style={{ marginTop: 16, marginBottom: 8 }}>
-          <Typography.Title level={5} style={{ marginBottom: 4 }}>
-            Stratum balance{' '}
-            <Tag color={strataBalance.passed ? 'success' : 'error'}>
-              {strataBalance.passed ? 'balanced' : 'imbalance'} (p={strataBalance.p_value.toExponential(2)})
-            </Tag>
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-            Group × stratum composition on the analyzed users — was the split balanced across the declared strata?
-          </Typography.Paragraph>
-          <Table
-            size="small"
-            pagination={false}
-            dataSource={strataBalance.rows.map((r, i) => ({ key: i, ...r }))}
-            columns={[
-              { title: 'Stratum', dataIndex: 'stratum' },
-              ...strataBalance.groups.map((g) => ({ title: g, dataIndex: g })),
-            ]}
-          />
-        </div>
-      )}
+      {strataBalance && <StrataBalanceTable balance={strataBalance} />}
 
       {activeMetric && metricResults && (
         <div style={{ marginTop: 32 }}>
@@ -251,43 +222,13 @@ export function AnalyzeResults({ data, alpha }: { data: AnalysisResultsOut; alph
               </div>
             ))}
 
-          {metricChart && dimensionLabels.length > 0 && activeDimension && (
-            <div>
-              {dimensionLabels.length > 1 && (
-                <Space style={{ marginBottom: 12 }}>
-                  <Typography.Text type="secondary">Segment by:</Typography.Text>
-                  <Segmented
-                    options={dimensionLabels}
-                    value={activeDimension}
-                    onChange={(v) => setSegmentDimension(v as string)}
-                  />
-                </Space>
-              )}
-              {Object.entries(metricChart.segments_by_dimension[activeDimension] ?? {}).map(([treatName, segs]) => (
-                <div key={treatName}>
-                  <Typography.Title level={5}>
-                    By {activeDimension}: {metricChart.control_name} vs {treatName} <Tag>exploratory</Tag>
-                    {adHocDimensions.includes(activeDimension) && (
-                      <Tag color="orange">ad-hoc (not declared at design)</Tag>
-                    )}
-                  </Typography.Title>
-                  <ForestPlotChart
-                    rows={segs.map((s) => ({
-                      label: s.stratum,
-                      effectRelPct: s.effect_rel * 100,
-                      ciLoPct: s.ci_rel[0] * 100,
-                      ciHiPct: s.ci_rel[1] * 100,
-                      highlighted: false,
-                      extraTooltipLines: [
-                        `n: ${metricChart.control_name}=${s.n[metricChart.control_name] ?? '—'}, ` +
-                          `${treatName}=${s.n[treatName] ?? '—'}`,
-                      ],
-                    }))}
-                  />
-                  <HelpCollapse chartType="segment_forest" />
-                </div>
-              ))}
-            </div>
+          {metricChart && (
+            <SegmentBreakdown
+              metricChart={metricChart}
+              adHocDimensions={adHocDimensions}
+              combinationDimensions={combinationDimensions}
+              postHocDimensions={postHocDimensions}
+            />
           )}
         </div>
       )}

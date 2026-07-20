@@ -53,7 +53,7 @@ def test_design_external_persists_reference_dataset_and_strata(tmp_path):
         name="ext_ref", reference_dataset_id="11111111-1111-1111-1111-111111111111",
         strata=["country"],
     )
-    experiment = Experiment.design_external(config, experiments_dir=tmp_path)
+    Experiment.design_external(config, experiments_dir=tmp_path)
     # Round-trips through the store, not just the in-memory object.
     loaded = Experiment.load("ext_ref", experiments_dir=tmp_path)
     assert loaded.config.reference_dataset_id == "11111111-1111-1111-1111-111111111111"

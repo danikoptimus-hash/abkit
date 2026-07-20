@@ -190,6 +190,19 @@ class AnalyzeRequest(BaseModel):
     # design-declared strata only (unchanged behavior). Columns not among the
     # declared strata are "ad-hoc" segments, marked as such in the results.
     segment_columns: list[str] | None = None
+    # Segment-combinations package (§1): each inner list is 2+ columns to CROSS
+    # into one segment cut (country × platform). Cell-count guard enforced
+    # server-side before the run (abkit/segments.py); refused if > 200 cells.
+    segment_combinations: list[list[str]] | None = None
+
+
+class AddSegmentsRequest(BaseModel):
+    """Post-hoc segment cut (segment-combinations package §2) — the same picker
+    as pre-run: single columns and/or 2+-column combinations to append to a
+    finished run's segments."""
+
+    segment_columns: list[str] | None = None
+    segment_combinations: list[list[str]] | None = None
 
 
 class AnalyzeDemoRequest(BaseModel):

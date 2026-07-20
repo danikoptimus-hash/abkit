@@ -499,8 +499,10 @@ def test_analysis_report_has_help_expanders_for_all_chart_types(tmp_path):
     results = experiment.analyze(post_data, date_col="event_date")
     html = results.report().read_text(encoding="utf-8")
 
-    assert html.count("<details>") == html.count("</details>")
-    assert html.count("<details>") > 0
+    # Count opening tags with OR without attributes (the strata-balance
+    # collapse uses <details class="...">, help expanders use bare <details>).
+    assert html.count("<details") == html.count("</details>")
+    assert html.count("<details") > 0
     assert "❓ How do I read this chart?" in html
     assert "❓ How do I read this table?" in html
     # текст помощи для binary-метрики (bar chart) должен быть про Wilson-ДИ, а не про гистограмму

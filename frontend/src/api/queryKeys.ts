@@ -37,6 +37,8 @@ export const queryKeys = {
     ['dataset-column-values', id, groupColumn] as const,
   datasetDuplicateCheck: (id: string | undefined, unitCol: string | undefined) =>
     ['dataset-duplicate-check', id, unitCol] as const,
+  datasetColumnCardinalities: (id: string | undefined, columns: string[]) =>
+    ['dataset-column-cardinalities', id, [...columns].sort().join('|')] as const,
 
   // Database connections
   adminDbConnections: () => ['admin-db-connections'] as const,

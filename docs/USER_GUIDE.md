@@ -586,14 +586,39 @@ The **Results** tab has, per metric:
   for deciding to stop a test early (see "peeking" in the FAQ below), and
   segment breakdowns get no multiple-testing correction — treat a segment-level
   finding as a hypothesis for a follow-up test, not as evidence on its own.
-  When you stratified on more than one column, a **Segment by** selector
-  above the forest plot switches between each stratification dimension on
-  its own (e.g. just gender, just country) and their combination (gender ×
-  country) — previously only the combination was shown, which hid an effect
-  that's actually consistent by gender but looks noisy once you also split
-  by country. The design report has the same breakdown, as one subsection
-  per dimension plus the combined one; every segment view still carries the
-  "exploratory" label regardless of which dimension it's sliced by.
+- **Segments: declaring the cuts you want.** The effect can be broken down
+  by segment, but the full space of combinations explodes (5-6 attributes ×
+  their values), so ABSet never precomputes everything — *you declare the
+  cuts*. On the **Analysis** tab, the **Segments** picker (pre-filled with
+  the design-declared strata) takes two kinds of cut:
+  - **Single columns** — break down by one attribute (e.g. country).
+  - **Combinations** — cross 2+ columns into one cut (country × platform).
+    Pick the columns and click **Add**; each combination shows as a chip with
+    its **cell count** (the product of the columns' distinct values). A guard
+    is applied live: above **30 cells** you get a warning, and above **200**
+    the combination is refused ("this many segments is noise, not analysis —
+    narrow the combination").
+
+  In the results, each declared cut renders under its own **Segment by** block
+  (single dimensions and combinations side by side). A cell with **fewer than
+  100 users per group** is shown greyed with an **underpowered** badge instead
+  of a lift — an overall balanced split can still leave an individual cell too
+  small to say anything about.
+- **Adding a cut after the run (post-hoc).** On the **Results** tab, **Analyze
+  segments** opens the same picker and computes an *additional* cut against the
+  run's stored dataset — appended to the segments, individually removable, and
+  persisted with the run. It never re-runs the metrics: the verdict and the
+  primary results are untouched. Use it when the analysis dataset carries an
+  attribute you didn't think to declare before running. **Every segment result
+  is hypothesis-generating only** — no multiple-testing correction, not a
+  decision input; validate any segment finding with a fresh, targeted test.
+- **Stratum balance table.** When strata are declared (or a segment cut is
+  chosen), the results show the group × stratum composition with a chi-square
+  balance check — was the split balanced across those attributes? A long table
+  (more than 12 strata) is collapsed by default behind a summary line
+  ("N strata · balance chi-square p=… · passed/failed"); your expand/collapse
+  choice is remembered. The exported HTML report collapses it the same way
+  (with no JavaScript).
 - **Distribution chart display modes** (continuous metrics only) — a toggle
   above the density/ECDF charts, up to three options depending on the data:
   - **Clipped at P99** (default when there are outliers) — the axis is cut
@@ -677,13 +702,12 @@ a mapped value. From there the pipeline is the familiar one:
 - **SRM** compares the *actual* proportions in your mapped data against the
   proportions you declared at design time (instead of against an ABSet split
   ratio — same check, different source for "expected").
-- **Segment columns.** The analysis options include a **Segment columns**
-  picker, pre-filled with your design-declared strata. You can add *any*
-  column from the analysis dataset — the exported results may carry
-  attributes that weren't declared (or didn't exist) at design time. Anything
-  not declared at design is labeled **ad-hoc** in the results/report. Segment
-  breakdowns stay exploratory (no multiple-testing correction). This picker is
-  available for ABSet-split experiments too.
+- **Segments.** The analysis options include the **Segments** picker
+  (single columns *and* cross-column combinations), pre-filled with your
+  design-declared strata — see "Segments: declaring the cuts you want" under
+  [Reading results](#5-reading-results) for the picker, the cell-count guard,
+  underpowered cells, and adding a cut post-hoc. Anything not declared at
+  design is labeled **ad-hoc**. Available for ABSet-split experiments too.
 - **Stratum balance table.** When strata are declared (or segment columns
   chosen), the results show a group × stratum composition table with a
   chi-square balance check.

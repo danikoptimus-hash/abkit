@@ -26,7 +26,7 @@ from abkit.analysis.variance_reduction import CUPED, PostStratification
 from abkit.config import DesignConfig, MetricConfig
 from abkit.design import isolation, power
 from abkit.design.splitter import split as run_split
-from abkit.design.stratification import bucket_column, build_strata, nan_counts_by_column
+from abkit.design.stratification import bucket_column, build_strata, cross_columns, nan_counts_by_column
 from abkit.idnorm import normalize_id_series
 from abkit.pipeline import MetricContext, Pipeline, Step
 from abkit.preprocessing.outliers import RemoveOutliers, Winsorize
@@ -1169,6 +1169,7 @@ class Experiment:
         group_column: str | None = None,
         group_mapping: dict[str, str] | None = None,
         segment_columns: list[str] | None = None,
+        segment_combinations: list[list[str]] | None = None,
         created_at: datetime | None = None,
         started_at: datetime | None = None,
         completed_at: datetime | None = None,
@@ -1236,6 +1237,13 @@ class Experiment:
         down directly on their raw values. Both flows accept ad-hoc columns.
         A declared/ad-hoc column absent from the uploaded data degrades
         gracefully: a warning names it, that column is skipped, the rest runs.
+
+        segment_combinations: segment-combinations package (§1) — each inner
+        list is 2+ columns to CROSS into one extra segment cut (country ×
+        platform), rendered as its own labeled block. Deduped by the SET of
+        columns (order-independent, and against the design cross-product);
+        missing columns → warn + skip. The cell-count guard (abkit/segments.py)
+        is enforced by the caller (request layer) before this runs.
         """
         cb = progress_callback or (lambda _label: None)
         global_warnings: list[str] = []
@@ -1450,6 +1458,40 @@ class Experiment:
                 global_warnings.append(
                     f"Segment column '{col}' is not in the analysis dataset — skipped."
                 )
+
+        # Segment COMBINATIONS (package §1): analyst-declared crosses of 2+
+        # columns (country × platform). Each is one extra dimension whose
+        # cells are the cross-product of the (bucketed) column values — added
+        # to dimension_series so the same per-dimension loop below computes it,
+        # no shape change downstream. Deduped by the SET of columns so
+        # "country × platform" and "platform × country" (and a combo equal to
+        # the design cross-product) collapse to one cut — the caller may pass
+        # either order (see the post-hoc flow). Missing columns → warn + skip.
+        combination_dimensions: list[str] = []
+        covered_cut_sets: set[frozenset[str]] = {frozenset([lbl]) for lbl in dimension_series}
+        if len(effective_strata) > 1:
+            covered_cut_sets.add(frozenset(effective_strata))
+        for combo in (segment_combinations or []):
+            present = [c for c in combo if c in merged.columns]
+            missing = [c for c in combo if c not in merged.columns]
+            if missing:
+                global_warnings.append(
+                    f"Segment combination [{' × '.join(combo)}] skipped — "
+                    f"column(s) not in the analysis dataset: {', '.join(missing)}."
+                )
+                continue
+            if len(present) < 2:
+                continue
+            key = frozenset(present)
+            if key in covered_cut_sets:
+                continue
+            covered_cut_sets.add(key)
+            label = " × ".join(present)
+            dimension_series[label] = cross_columns(
+                merged, present, self.config.n_buckets_continuous
+            )
+            combination_dimensions.append(label)
+
         daily_results: dict[str, dict[str, pd.DataFrame]] = {}
 
         n_metrics = len(self.config.metrics)
@@ -1559,6 +1601,7 @@ class Experiment:
             segment_results=segment_results,
             segment_results_by_dimension=segment_results_by_dimension,
             ad_hoc_segment_dimensions=ad_hoc_dimensions,
+            combination_segment_dimensions=combination_dimensions,
             strata_balance=strata_balance_result,
             daily_results=daily_results,
             correction=correction,

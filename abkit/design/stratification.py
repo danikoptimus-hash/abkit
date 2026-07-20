@@ -32,6 +32,22 @@ def bucket_column(series: pd.Series, n_buckets: int) -> pd.Series:
     return result.where(~nan_mask, _UNKNOWN_VALUE)
 
 
+def cross_columns(data: pd.DataFrame, cols: list[str], n_buckets_continuous: int = 4) -> pd.Series:
+    """Cross 2+ columns into one "|"-joined label per row, for a segment
+    COMBINATION cut (country × platform × ...). Same bucketing as build_strata
+    (numeric high-cardinality → quantile buckets, NaN → "unknown"), but WITHOUT
+    the min_stratum_size collapse to "_other_": a segment breakdown must SHOW
+    small/underpowered cells (greyed at render), not hide them. Empty/single
+    `cols` isn't a combination — callers guard for len>=2 before calling."""
+    bucketed = pd.DataFrame(
+        {col: bucket_column(data[col], n_buckets_continuous) for col in cols},
+        index=data.index,
+    )
+    crossed = bucketed.astype(str).agg("|".join, axis=1)
+    crossed.name = "segment"
+    return crossed
+
+
 def nan_counts_by_column(data: pd.DataFrame, strata_cols: list[str]) -> dict[str, int]:
     """Считает число пропусков в каждой стратификационной колонке (для отчета/warning)."""
     return {col: int(data[col].isna().sum()) for col in strata_cols}

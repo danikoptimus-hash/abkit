@@ -110,6 +110,14 @@ class ColumnValuesResponse(BaseModel):
     truncated: bool
 
 
+class ColumnCardinalitiesResponse(BaseModel):
+    """Segment-combinations package (§1): effective distinct-value count per
+    requested column (after bucketing) — the frontend multiplies these across
+    a combination for the live cell-count guard."""
+
+    cardinalities: dict[str, int]
+
+
 class DuplicateCheckResponse(BaseModel):
     """Analyze tab, before "Run analysis" — whether the chosen post-period
     dataset has duplicate values in the experiment's unit_col (day-by-day/

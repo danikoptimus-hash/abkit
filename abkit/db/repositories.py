@@ -126,7 +126,9 @@ class UserRepo:
             user.last_name = last_name
 
     def update_preferences(
-        self, user_id: uuid_mod.UUID, *, folders_panel_collapsed: bool | None = None
+        self, user_id: uuid_mod.UUID, *,
+        folders_panel_collapsed: bool | None = None,
+        strata_balance_expanded: bool | None = None,
     ) -> None:
         """Частичный патч UI-настроек: None = "не трогать". Новая настройка —
         новый именованный аргумент здесь и новое поле в
@@ -137,6 +139,8 @@ class UserRepo:
                 raise RepoError(f"User {user_id} not found")
             if folders_panel_collapsed is not None:
                 user.folders_panel_collapsed = folders_panel_collapsed
+            if strata_balance_expanded is not None:
+                user.strata_balance_expanded = strata_balance_expanded
 
     def set_password_hash(
         self, user_id: uuid_mod.UUID, password_hash: str, must_change_password: bool = False
@@ -780,6 +784,31 @@ class ResultRepo:
             if r is not None:
                 s.expunge(r)
             return r
+
+    def get_by_id(self, result_id: uuid_mod.UUID) -> AnalysisResult | None:
+        with session_scope() as s:
+            r = s.get(AnalysisResult, result_id)
+            if r is not None:
+                s.expunge(r)
+            return r
+
+    def update_results(self, result_id: uuid_mod.UUID, results: dict[str, Any]) -> None:
+        """Post-hoc segment cuts (segment-combinations package §2) append/remove
+        a segment DIMENSION on an already-finished run — an annotation on the
+        SAME run, not a new analysis. So the run's JSONB `results` blob is
+        rewritten in place (verdict/metrics untouched — the caller only mutates
+        chart_data.*.segments_by_dimension) rather than inserting a new row,
+        keeping run_number stable and export's history intact.
+
+        NOTE: `results` is a JSONB column — reassigning a nested key in a
+        loaded ORM object does NOT flag the column dirty (SQLAlchemy can't see
+        into the dict). The caller passes a fresh top-level dict and this
+        assigns the whole attribute, which SQLAlchemy DOES track."""
+        with session_scope() as s:
+            row = s.get(AnalysisResult, result_id)
+            if row is None:
+                raise RepoError(f"Analysis result {result_id} not found")
+            row.results = results
 
     def list_for_experiment(self, experiment_id: uuid_mod.UUID) -> list[AnalysisResult]:
         """Все прогоны анализа, старейший первым (в отличие от

@@ -33,6 +33,7 @@ from backend.schemas.design import DesignRequest, JobAccepted
 from backend.schemas.flow_images import FlowImageOut, SetFlowImageGroupOrderRequest
 from backend.schemas.experiments import (
     REPORT_FILENAMES,
+    AddSegmentsRequest,
     AnalyzeDemoRequest,
     AnalyzeRequest,
     AuditEntryOut,
@@ -586,6 +587,9 @@ def get_results(name: str, user: CurrentUser = Depends(get_current_user)) -> dic
             # itself being deleted later, unlike a live DatasetRepo lookup.
             "dataset_filename": result.dataset_filename,
             "run_number": ResultRepo().count_for_experiment(exp.id),
+            # Package §2: the live dataset id (None if the dataset was deleted)
+            # — the Results tab needs it to compute a post-hoc segment cut.
+            "dataset_id": str(result.dataset_id) if result.dataset_id else None,
         },
     }
 
@@ -847,8 +851,137 @@ def _load_dataset_df(dataset_id: str, unit_col: str | None = None) -> pd.DataFra
     return read_dataset_file(dataset.storage_path, dtype=dtype)
 
 
+def _segment_cell_count(data: pd.DataFrame, cols: list[str], n_buckets: int) -> int:
+    """Cell count of a segment cut = product of each column's distinct value
+    count AFTER the same bucketing the breakdown uses (so a high-cardinality
+    numeric column counts as its bucket count, not its raw distinct count).
+    Missing columns contribute nothing (they'll be skipped/warned at run)."""
+    from abkit.design.stratification import bucket_column
+
+    total = 1
+    for col in cols:
+        if col not in data.columns:
+            continue
+        total *= max(1, int(bucket_column(data[col], n_buckets).nunique()))
+    return total
+
+
+def _enforce_segment_cardinality(
+    data: pd.DataFrame, combinations: list[list[str]] | None, n_buckets: int
+) -> None:
+    """Refuse (422) any combination whose cell count exceeds the guard's hard
+    limit — "this many segments is noise, not analysis". Mirrors the live
+    frontend guard (abkit/segments.py thresholds)."""
+    from abkit.segments import segment_cardinality_status
+
+    for combo in combinations or []:
+        present = [c for c in combo if c in data.columns]
+        if len(present) < 2:
+            continue
+        n_cells = _segment_cell_count(data, present, n_buckets)
+        if segment_cardinality_status(n_cells) == "refuse":
+            raise APIError(
+                422, "segment_too_large",
+                f"The combination [{' × '.join(present)}] would produce {n_cells} segments — "
+                "this many segments is noise, not analysis. Narrow the combination.",
+            )
+
+
+def _translate_method_selection(experiment, body_methods: dict[str, list[str]] | None):
+    """{metric: [method_id, ...]} (first = designed/primary) -> the two shapes
+    Experiment.analyze() wants: `methods` (designed chain from id[0]) and
+    `extra_methods` (comparison chains from id[1:]). Shared by the analyze run
+    and the post-hoc segment recompute (which must use the SAME methods)."""
+    from abkit import checks
+    from abkit.experiment import steps_for_method_id
+
+    if not body_methods:
+        return None, None
+    metrics_by_name = {m.name: m for m in experiment.config.metrics}
+    methods: dict[str, Any] = {}
+    extra_methods: dict[str, Any] = {}
+    for metric_name, method_ids in body_methods.items():
+        metric = metrics_by_name.get(metric_name)
+        if metric is None:
+            raise checks.AnalysisError(f"Unknown metric '{metric_name}' in methods override")
+        if not method_ids:
+            raise checks.AnalysisError(f"No analysis method selected for metric '{metric_name}'")
+        methods[metric_name] = steps_for_method_id(metric, method_ids[0], seed=experiment.config.seed)
+        extra_methods[metric_name] = [
+            steps_for_method_id(metric, mid, seed=experiment.config.seed) for mid in method_ids[1:]
+        ]
+    return methods, extra_methods
+
+
+def _dimension_column_set(label: str) -> frozenset[str]:
+    """The SET of columns a segment-dimension label represents — "country ×
+    platform" -> {country, platform}, "country" -> {country}. Used to dedupe a
+    post-hoc cut against dimensions already on the run, order-independently."""
+    return frozenset(part.strip() for part in label.split(" × "))
+
+
+def _merge_posthoc_segments(stored: dict[str, Any], fresh: dict[str, Any]) -> dict[str, Any]:
+    """Merge the NEW segment dimensions from a fresh recompute (`fresh` =
+    build_chart_data output) into a stored run payload (`stored`), returning a
+    new payload. Only dimensions whose column-SET isn't already on the run are
+    added (dedupe: "country × gender" won't re-add over "gender × country");
+    each added dimension is tagged post-hoc (+ ad-hoc/combination as
+    applicable). Metrics/verdict are never touched."""
+    import copy
+
+    payload = copy.deepcopy(stored)
+    cd = payload.setdefault("chart_data", {})
+    stored_metrics = cd.setdefault("metrics", {})
+    fresh_metrics = fresh.get("metrics", {})
+
+    covered = {
+        _dimension_column_set(lbl)
+        for m in stored_metrics.values()
+        for lbl in m.get("segments_by_dimension", {})
+    }
+    # All dimension labels present in the fresh recompute (union across metrics).
+    fresh_labels: list[str] = []
+    for m in fresh_metrics.values():
+        for lbl in m.get("segments_by_dimension", {}):
+            if lbl not in fresh_labels:
+                fresh_labels.append(lbl)
+
+    added: list[str] = []
+    for lbl in fresh_labels:
+        if _dimension_column_set(lbl) in covered:
+            continue
+        covered.add(_dimension_column_set(lbl))
+        added.append(lbl)
+        for metric_name, fm in fresh_metrics.items():
+            seg = fm.get("segments_by_dimension", {}).get(lbl)
+            if seg is None:
+                continue
+            stored_metrics.setdefault(metric_name, {}).setdefault("segments_by_dimension", {})[lbl] = seg
+
+    if added:
+        fresh_ad_hoc = set(fresh.get("ad_hoc_dimensions", []))
+        fresh_combo = set(fresh.get("combination_dimensions", []))
+        cd["post_hoc_dimensions"] = _dedup_append(cd.get("post_hoc_dimensions", []), added)
+        cd["ad_hoc_dimensions"] = _dedup_append(
+            cd.get("ad_hoc_dimensions", []), [lbl for lbl in added if lbl in fresh_ad_hoc]
+        )
+        cd["combination_dimensions"] = _dedup_append(
+            cd.get("combination_dimensions", []), [lbl for lbl in added if lbl in fresh_combo]
+        )
+    return payload
+
+
+def _dedup_append(existing: list[str], new: list[str]) -> list[str]:
+    out = list(existing)
+    for x in new:
+        if x not in out:
+            out.append(x)
+    return out
+
+
 def _save_analysis(
     name: str, results, *, dataset_id: uuid_mod.UUID | None = None, created_by: uuid_mod.UUID | None = None,
+    analysis_params: dict[str, Any] | None = None,
 ) -> None:
     """report()+save_analysis_result — ПОСЛЕ этого GET /{name}/results
     (R2) возвращает настоящий результат, а не 404 (analysis_results иначе
@@ -880,6 +1013,8 @@ def _save_analysis(
     report_path = results.report()
     payload = json.loads(results.to_json())
     payload["chart_data"] = build_chart_data(results)
+    if analysis_params is not None:
+        payload["analysis_params"] = analysis_params
     payload = sanitize_json_floats(payload)
     DbExperimentStore().save_analysis_result(
         name, json.dumps(payload, ensure_ascii=False), report_path,
@@ -945,45 +1080,32 @@ def start_analyze(
     exp = _visible_or_404(_get_experiment_or_404(name), user)
     from abkit.experiment import Experiment
 
-    unit_col = Experiment.load(name).config.unit_col
-    data = _load_dataset_df(body.dataset_id, unit_col=unit_col)
+    config = Experiment.load(name).config
+    data = _load_dataset_df(body.dataset_id, unit_col=config.unit_col)
+    # Segment-combinations package (§1): reject a cut whose cell count exceeds
+    # the guard's hard limit BEFORE queuing the job (defense-in-depth behind
+    # the live frontend guard; a direct API call must not be able to request
+    # a 10k-cell breakdown).
+    _enforce_segment_cardinality(data, body.segment_combinations, config.n_buckets_continuous)
 
     def _run(reporter) -> dict[str, Any]:
-        from abkit import checks
         from abkit.db.repositories import ExperimentDatasetRepo
-        from abkit.experiment import Experiment, steps_for_method_id
+        from abkit.experiment import Experiment
         from abkit.jobs import run_analyze
 
         experiment = Experiment.load(name)
         # Item 3 (consolidated package, multi-select methods): body.methods
         # is {metric_name: [method_id, ...]} (UI-facing strings, first =
-        # primary) — translate to the two shapes Experiment.analyze() wants:
-        # `methods` (designed chain, from the FIRST id) and `extra_methods`
-        # (comparison chains, from the REST) — this fully replaces the old
-        # single-id `methods` override plus the separate `compare_methods`
-        # bool. A metric absent from body.methods keeps resolve_steps()'
-        # usual type/config-based default (no entry in either dict here).
-        methods = None
-        extra_methods = None
-        if body.methods:
-            metrics_by_name = {m.name: m for m in experiment.config.metrics}
-            methods = {}
-            extra_methods = {}
-            for metric_name, method_ids in body.methods.items():
-                metric = metrics_by_name.get(metric_name)
-                if metric is None:
-                    raise checks.AnalysisError(f"Unknown metric '{metric_name}' in methods override")
-                if not method_ids:
-                    raise checks.AnalysisError(f"No analysis method selected for metric '{metric_name}'")
-                methods[metric_name] = steps_for_method_id(metric, method_ids[0], seed=experiment.config.seed)
-                extra_methods[metric_name] = [
-                    steps_for_method_id(metric, mid, seed=experiment.config.seed) for mid in method_ids[1:]
-                ]
+        # primary) — translated to Experiment.analyze()'s `methods` (designed)
+        # + `extra_methods` (comparison) shapes. Shared with the post-hoc
+        # segment recompute so both use the same designed method.
+        methods, extra_methods = _translate_method_selection(experiment, body.methods)
         results = run_analyze(
             user, experiment, data, correction=body.correction,
             date_col=body.date_col,
             group_column=body.group_column, group_mapping=body.group_mapping,
             segment_columns=body.segment_columns,
+            segment_combinations=body.segment_combinations,
             methods=methods, extra_methods=extra_methods,
             progress_callback=reporter.stage,
             # Stage 2 (report header dates): `exp` (the DB row, fetched
@@ -994,6 +1116,15 @@ def start_analyze(
         _save_analysis(
             name, results,
             dataset_id=uuid_mod.UUID(body.dataset_id), created_by=uuid_mod.UUID(user.id),
+            # Package §2: freeze the params a post-hoc segment cut needs to
+            # recompute against this exact run (external group mapping, the
+            # per-metric method selection, any date column).
+            analysis_params={
+                "group_column": body.group_column,
+                "group_mapping": body.group_mapping,
+                "methods": body.methods,
+                "date_col": body.date_col,
+            },
         )
         # DB3 (dataset-centric model): record this dataset as used for
         # analysis by this experiment — a dataset may be reused across
@@ -1003,6 +1134,96 @@ def start_analyze(
 
     job = runner.submit("analyze", uuid_mod.UUID(user.id), _run)
     return JobAccepted(job_id=str(job.id))
+
+
+@router.post("/{name}/results/segments", response_model=JobAccepted, status_code=202)
+def add_result_segments(
+    name: str, body: AddSegmentsRequest,
+    user: CurrentUser = Depends(require_min_role("editor")),
+    runner: JobRunner = Depends(get_job_runner),
+) -> JobAccepted:
+    """Post-hoc (segment-combinations package §2): compute an additional
+    segment cut (columns and/or combinations, same guards) against the STORED
+    dataset of the latest finished run and append it to that run's segments —
+    no re-analysis of metrics, verdict untouched. Editor+ on any visible
+    experiment, same bar as running the analysis itself."""
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    from abkit.db.repositories import ResultRepo
+    from abkit.experiment import Experiment
+
+    run = ResultRepo().latest_for_experiment(exp.id)
+    if run is None:
+        raise APIError(404, "not_found", "This experiment has no analysis run to add segments to.")
+    if run.dataset_id is None:
+        raise APIError(
+            409, "dataset_unavailable",
+            "The dataset this run was computed on is no longer available, so new segments "
+            "can't be computed. Re-run the analysis with the segments you need.",
+        )
+    config = Experiment.load(name).config
+    data = _load_dataset_df(str(run.dataset_id), unit_col=config.unit_col)
+    _enforce_segment_cardinality(data, body.segment_combinations, config.n_buckets_continuous)
+
+    run_id = run.id
+    stored = run.results
+    params = stored.get("analysis_params") or {}
+
+    def _run(reporter) -> dict[str, Any]:
+        from abkit.experiment import Experiment
+        from abkit.jobs import run_analyze
+        from backend.chart_data import build_chart_data, sanitize_json_floats
+
+        experiment = Experiment.load(name)
+        methods, extra_methods = _translate_method_selection(experiment, params.get("methods"))
+        # Recompute deterministically with the run's stored params + ONLY the
+        # requested new cuts; the fresh main results are identical to the
+        # stored ones (same data/seed/methods) and are discarded — we lift out
+        # just the new segment dimensions and merge them into the stored blob.
+        results = run_analyze(
+            user, experiment, data, correction="none",
+            date_col=params.get("date_col"),
+            group_column=params.get("group_column"), group_mapping=params.get("group_mapping"),
+            segment_columns=body.segment_columns,
+            segment_combinations=body.segment_combinations,
+            methods=methods, extra_methods=extra_methods,
+            progress_callback=reporter.stage,
+        )
+        fresh = build_chart_data(results)
+        merged_payload = _merge_posthoc_segments(stored, fresh)
+        ResultRepo().update_results(run_id, sanitize_json_floats(merged_payload))
+        return {"experiment_name": name}
+
+    job = runner.submit("analyze", uuid_mod.UUID(user.id), _run)
+    return JobAccepted(job_id=str(job.id))
+
+
+@router.delete("/{name}/results/segments")
+def remove_result_segment(
+    name: str, label: str,
+    user: CurrentUser = Depends(require_min_role("editor")),
+) -> dict[str, bool]:
+    """Remove a POST-HOC segment cut from the latest run (only cuts added
+    post-hoc are removable — the ones declared before the run are part of it)."""
+    import copy
+
+    exp = _visible_or_404(_get_experiment_or_404(name), user)
+    from abkit.db.repositories import ResultRepo
+
+    run = ResultRepo().latest_for_experiment(exp.id)
+    if run is None:
+        raise APIError(404, "not_found", "This experiment has no analysis run.")
+    payload = copy.deepcopy(run.results)
+    cd = payload.get("chart_data", {})
+    post_hoc = cd.get("post_hoc_dimensions", [])
+    if label not in post_hoc:
+        raise APIError(400, "not_removable", "Only post-hoc segment cuts can be removed.")
+    for m in cd.get("metrics", {}).values():
+        m.get("segments_by_dimension", {}).pop(label, None)
+    cd["post_hoc_dimensions"] = [d for d in post_hoc if d != label]
+    cd["ad_hoc_dimensions"] = [d for d in cd.get("ad_hoc_dimensions", []) if d != label]
+    cd["combination_dimensions"] = [d for d in cd.get("combination_dimensions", []) if d != label]
+    ResultRepo().update_results(run.id, payload)
+    return {"ok": True}
 
 
 @router.post("/{name}/demo-post-data", response_model=DatasetOut, status_code=201)

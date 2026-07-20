@@ -37,6 +37,7 @@ from backend.schemas.datasets import (
     BulkDeleteDatasetsRequest,
     BulkDeleteDatasetsResult,
     BulkDeleteDatasetsSkipped,
+    ColumnCardinalitiesResponse,
     ColumnValueCount,
     ColumnValuesResponse,
     DatasetExperimentUse,
@@ -274,6 +275,43 @@ def get_column_values(
         values=[ColumnValueCount(value=v, count=int(c)) for v, c in top.items()],
         truncated=total_distinct > limit,
     )
+
+
+@router.get("/{dataset_id}/column-cardinalities", response_model=ColumnCardinalitiesResponse)
+def get_column_cardinalities(
+    dataset_id: str,
+    columns: list[str] = Query(default=[]),
+    user: CurrentUser = Depends(require_min_role("editor")),
+) -> ColumnCardinalitiesResponse:
+    """Segment-combinations package (§1): the EFFECTIVE distinct-value count of
+    each requested column — after the same bucketing the segment breakdown
+    applies (a high-cardinality numeric column collapses to its bucket count,
+    not its raw distinct count). The frontend multiplies these across a
+    combination to get its live cell count for the cardinality guard."""
+    from abkit.design.stratification import bucket_column
+
+    try:
+        parsed_id = uuid_mod.UUID(dataset_id)
+    except ValueError as e:
+        raise APIError(422, "validation_error", "Invalid dataset id") from e
+
+    ds = DatasetRepo().get_by_id(parsed_id)
+    if ds is None:
+        raise APIError(404, "not_found", f"Dataset '{dataset_id}' not found")
+
+    wanted = [c for c in columns if c in ds.columns]
+    if not wanted:
+        return ColumnCardinalitiesResponse(cardinalities={})
+    try:
+        df = read_dataset_file(ds.storage_path)
+    except OSError as e:
+        raise APIError(404, "not_found", "Dataset file is not available on disk") from e
+
+    # Default bucket count (4) matches DesignConfig.n_buckets_continuous — the
+    # dataset isn't tied to a config, and the analyst picks categorical columns
+    # for segments anyway (where bucketing is a no-op).
+    cardinalities = {c: int(bucket_column(df[c], 4).nunique()) for c in wanted}
+    return ColumnCardinalitiesResponse(cardinalities=cardinalities)
 
 
 @router.get("/{dataset_id}/duplicate-check", response_model=DuplicateCheckResponse)

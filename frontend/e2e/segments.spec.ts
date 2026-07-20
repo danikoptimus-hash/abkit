@@ -1,0 +1,158 @@
+import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
+import { loginViaUi, uploadDataset } from './helpers'
+
+const API_BASE = process.env.E2E_API_BASE ?? 'http://localhost:8000/api/v1'
+
+// AntD keeps closed dropdowns in the DOM (hidden), so with several selects on
+// the page a global option locator matches stale options too — scope to the
+// dropdown that's actually open right now (the last one AntD appended).
+async function pickOption(page: Page, combobox: Locator, optionLabel: string) {
+  await combobox.click()
+  await page.locator('.ant-select-dropdown').last().getByTitle(optionLabel, { exact: true }).click()
+}
+
+async function login(request: APIRequestContext) {
+  const r = await request.post(`${API_BASE}/auth/login`, {
+    data: { email: 'admin@e2e.test', password: 'e2epass123' },
+  })
+  if (!r.ok()) throw new Error(`login failed: ${r.status()}`)
+}
+
+async function designExternal(request: APIRequestContext, name: string, strata: string[]) {
+  const resp = await request.post(`${API_BASE}/design`, {
+    data: {
+      config: {
+        name, unit_col: '',
+        groups: { control: 0.5, treatment: 0.5 },
+        metrics: [{ name: 'value', type: 'continuous', role: 'primary' }],
+        split_source: 'external', isolation: 'off', strata,
+      },
+    },
+  })
+  if (!resp.ok()) throw new Error(`design failed: ${resp.status()}`)
+  const { job_id } = await resp.json()
+  for (let i = 0; i < 80; i++) {
+    const job = await (await request.get(`${API_BASE}/jobs/${job_id}`)).json()
+    if (job.status === 'completed') return
+    if (job.status === 'failed') throw new Error(`design job failed: ${job.error}`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error('design job did not finish')
+}
+
+async function pickGroupMapping(page: Page) {
+  await pickOption(page, page.getByRole('combobox', { name: 'group-column-select' }), 'variant')
+  await pickOption(page, page.getByRole('combobox', { name: 'map-A' }), 'control')
+  await pickOption(page, page.getByRole('combobox', { name: 'map-B' }), 'treatment')
+}
+
+// §1 (pre-run combination) + §2 (post-hoc cut) end to end.
+test('declare a country × gender combination before running, then add a cut post-hoc', async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000)
+  const name = `segments_e2e_${Date.now()}`
+
+  // Powered cells (120/group per country×gender) so the crossed forest renders.
+  const rows = ['variant,value,country,gender']
+  for (const country of ['US', 'UK']) {
+    for (const gender of ['M', 'F']) {
+      for (let i = 0; i < 120; i++) {
+        rows.push(`A,${100 + (i % 5)},${country},${gender}`)
+        rows.push(`B,${130 + (i % 5)},${country},${gender}`)
+      }
+    }
+  }
+  const filename = `segments_${Date.now()}.csv`
+  await login(request)
+  await designExternal(request, name, ['country'])
+  await uploadDataset(request, rows.join('\n'), filename)
+
+  await loginViaUi(page)
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Analysis' }).click()
+
+  const datasetSelect = page.getByRole('combobox', { name: 'post-period-dataset-select' })
+  await datasetSelect.click()
+  await datasetSelect.fill(filename)
+  await page.getByTitle(filename).click()
+  await expect(page.getByText(new RegExp(`Data ready: ${filename.replace('.', '\\.')}`))).toBeVisible({
+    timeout: 15_000,
+  })
+
+  await pickGroupMapping(page)
+
+  // Add a country × gender combination via the shared cut picker.
+  const comboSelect = page.getByRole('combobox', { name: 'segment-combination-select' })
+  await comboSelect.click()
+  await page.locator('.ant-select-dropdown').last().getByTitle('country', { exact: true }).click()
+  await page.locator('.ant-select-dropdown').last().getByTitle('gender', { exact: true }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Add' }).click()
+  await expect(page.getByText(/country × gender \(4 cells\)/)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Run analysis' }).click()
+  await expect(
+    page.getByText(/significant positive|significant negative|no effect detected/).first(),
+  ).toBeVisible({ timeout: 20_000 })
+
+  // The crossed cut renders (as a "Segment by" option and its own block).
+  await expect(page.getByText('country × gender').first()).toBeVisible()
+
+  // §2: add a post-hoc cut on the finished run, from the Results tab.
+  await page.getByRole('tab', { name: 'Results' }).click()
+  await page.getByRole('button', { name: 'Analyze segments' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('combobox', { name: 'segment-columns-select' }).click()
+  await page.locator('.ant-select-dropdown').last().getByTitle('gender', { exact: true }).click()
+  await page.keyboard.press('Escape')
+  await dialog.getByRole('button', { name: 'Add segments' }).click()
+
+  // The post-hoc "gender" cut appears, tagged and removable.
+  await expect(page.getByText('added post-hoc')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/By gender/).first()).toBeVisible()
+})
+
+// §3: a many-strata balance table is collapsed by default with a summary line.
+test('strata balance table collapses with a summary on a many-strata run', async ({ page, request }) => {
+  test.setTimeout(60_000)
+  const name = `balance_collapse_e2e_${Date.now()}`
+
+  const rows = ['variant,value,country']
+  for (let c = 0; c < 13; c++) {
+    for (let i = 0; i < 40; i++) {
+      rows.push(`A,${100 + (i % 5)},C${c}`)
+      rows.push(`B,${101 + (i % 5)},C${c}`)
+    }
+  }
+  const filename = `balance_${Date.now()}.csv`
+  await login(request)
+  await designExternal(request, name, ['country'])
+  const { id: datasetId } = await uploadDataset(request, rows.join('\n'), filename)
+
+  // Analyze headlessly (13 strata), then check the Results tab.
+  const analyzeResp = await request.post(`${API_BASE}/experiments/${name}/analyze`, {
+    data: {
+      dataset_id: datasetId, correction: 'none',
+      group_column: 'variant', group_mapping: { A: 'control', B: 'treatment' },
+      segment_columns: ['country'],
+    },
+  })
+  if (!analyzeResp.ok()) throw new Error(`analyze failed: ${analyzeResp.status()}`)
+  const { job_id } = await analyzeResp.json()
+  for (let i = 0; i < 100; i++) {
+    const job = await (await request.get(`${API_BASE}/jobs/${job_id}`)).json()
+    if (job.status === 'completed') break
+    if (job.status === 'failed') throw new Error(`analyze job failed: ${job.error}`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+
+  await loginViaUi(page)
+  await page.goto(`/experiments/${name}`)
+  await page.getByRole('tab', { name: 'Results' }).click()
+
+  // Summary always visible; the per-stratum rows are hidden until expanded.
+  await expect(page.getByText(/13 strata · balance chi-square p=/)).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('cell', { name: 'C00', exact: true })).toBeHidden()
+})

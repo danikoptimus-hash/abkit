@@ -32,6 +32,7 @@ class UserOut(BaseModel):
     # пользователя: и /login, и /me отдают UserOut, так что отдельного
     # запроса за настройками на старте приложения не нужно.
     folders_panel_collapsed: bool = True
+    strata_balance_expanded: bool = False
 
     @classmethod
     def from_current_user(cls, user: CurrentUser) -> "UserOut":
@@ -39,6 +40,7 @@ class UserOut(BaseModel):
             id=user.id, email=user.email, name=user.name, role=user.role,
             must_change_password=user.must_change_password,
             folders_panel_collapsed=user.folders_panel_collapsed,
+            strata_balance_expanded=user.strata_balance_expanded,
         )
 
 
@@ -48,3 +50,4 @@ class UpdatePreferencesRequest(BaseModel):
     Новые настройки добавляются сюда новым опциональным полем."""
 
     folders_panel_collapsed: bool | None = None
+    strata_balance_expanded: bool | None = None

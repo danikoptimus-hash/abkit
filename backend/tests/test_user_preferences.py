@@ -90,3 +90,25 @@ def test_anonymous_cannot_set_preferences(app_client):
         "/api/v1/auth/me/preferences", json={"folders_panel_collapsed": False}
     )
     assert resp.status_code == 401, resp.text
+
+
+def test_strata_balance_expanded_defaults_false_and_persists(app_client):
+    """Настройка №2 (§3 collapsible strata balance) — тот же типизированный
+    паттерн: server_default=false (свернута), выбор переживает сессию, а
+    частичный патч не трогает соседнюю настройку."""
+    login = _login(app_client)
+    assert login.json()["strata_balance_expanded"] is False
+
+    patched = app_client.patch(
+        "/api/v1/auth/me/preferences", json={"strata_balance_expanded": True}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["strata_balance_expanded"] is True
+    # folders preference untouched by a strata-only patch.
+    assert patched.json()["folders_panel_collapsed"] is True
+
+    app_client.post("/api/v1/auth/logout")
+    relogin = app_client.post(
+        "/api/v1/auth/login", json={"email": "editor@co.com", "password": "pw12345"}
+    )
+    assert relogin.json()["strata_balance_expanded"] is True

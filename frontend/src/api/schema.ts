@@ -708,6 +708,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/experiments/{name}/results/segments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add Result Segments
+         * @description Post-hoc (segment-combinations package §2): compute an additional
+         *     segment cut (columns and/or combinations, same guards) against the STORED
+         *     dataset of the latest finished run and append it to that run's segments —
+         *     no re-analysis of metrics, verdict untouched. Editor+ on any visible
+         *     experiment, same bar as running the analysis itself.
+         */
+        post: operations["add_result_segments_api_v1_experiments__name__results_segments_post"];
+        /**
+         * Remove Result Segment
+         * @description Remove a POST-HOC segment cut from the latest run (only cuts added
+         *     post-hoc are removable — the ones declared before the run are part of it).
+         */
+        delete: operations["remove_result_segment_api_v1_experiments__name__results_segments_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/experiments/{name}/demo-post-data": {
         parameters: {
             query?: never;
@@ -802,6 +831,30 @@ export interface paths {
          *     actually in the data.
          */
         get: operations["get_column_values_api_v1_datasets__dataset_id__column_values_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/datasets/{dataset_id}/column-cardinalities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Column Cardinalities
+         * @description Segment-combinations package (§1): the EFFECTIVE distinct-value count of
+         *     each requested column — after the same bucketing the segment breakdown
+         *     applies (a high-cardinality numeric column collapses to its bucket count,
+         *     not its raw distinct count). The frontend multiplies these across a
+         *     combination to get its live cell count for the cardinality guard.
+         */
+        get: operations["get_column_cardinalities_api_v1_datasets__dataset_id__column_cardinalities_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1607,6 +1660,18 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AddSegmentsRequest
+         * @description Post-hoc segment cut (segment-combinations package §2) — the same picker
+         *     as pre-run: single columns and/or 2+-column combinations to append to a
+         *     finished run's segments.
+         */
+        AddSegmentsRequest: {
+            /** Segment Columns */
+            segment_columns?: string[] | null;
+            /** Segment Combinations */
+            segment_combinations?: string[][] | null;
+        };
         /** AnalyzeDemoRequest */
         AnalyzeDemoRequest: {
             /**
@@ -1638,6 +1703,8 @@ export interface components {
             } | null;
             /** Segment Columns */
             segment_columns?: string[] | null;
+            /** Segment Combinations */
+            segment_combinations?: string[][] | null;
         };
         /** AuditEntryOut */
         AuditEntryOut: {
@@ -1879,6 +1946,18 @@ export interface components {
             old_password: string;
             /** New Password */
             new_password: string;
+        };
+        /**
+         * ColumnCardinalitiesResponse
+         * @description Segment-combinations package (§1): effective distinct-value count per
+         *     requested column (after bucketing) — the frontend multiplies these across
+         *     a combination for the live cell-count guard.
+         */
+        ColumnCardinalitiesResponse: {
+            /** Cardinalities */
+            cardinalities: {
+                [key: string]: number;
+            };
         };
         /** ColumnValueCount */
         ColumnValueCount: {
@@ -3108,6 +3187,8 @@ export interface components {
         UpdatePreferencesRequest: {
             /** Folders Panel Collapsed */
             folders_panel_collapsed?: boolean | null;
+            /** Strata Balance Expanded */
+            strata_balance_expanded?: boolean | null;
         };
         /** UserAdminOut */
         UserAdminOut: {
@@ -3167,6 +3248,11 @@ export interface components {
              * @default true
              */
             folders_panel_collapsed: boolean;
+            /**
+             * Strata Balance Expanded
+             * @default false
+             */
+            strata_balance_expanded: boolean;
         };
         /** ValidateRequest */
         ValidateRequest: {
@@ -4522,6 +4608,80 @@ export interface operations {
             };
         };
     };
+    add_result_segments_api_v1_experiments__name__results_segments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddSegmentsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_result_segment_api_v1_experiments__name__results_segments_delete: {
+        parameters: {
+            query: {
+                label: string;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_demo_post_data_api_v1_experiments__name__demo_post_data_post: {
         parameters: {
             query?: never;
@@ -4727,6 +4887,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ColumnValuesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_column_cardinalities_api_v1_datasets__dataset_id__column_cardinalities_get: {
+        parameters: {
+            query?: {
+                columns?: string[];
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: {
+                abkit_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ColumnCardinalitiesResponse"];
                 };
             };
             /** @description Validation Error */
