@@ -106,6 +106,7 @@
       <td>
         <span class="role-tag {{ row.metric_role }}">{{ row.metric_role }}</span>
         {{ row.metric }}{% if row.metric_role == 'secondary' %} <sup title="secondary metric — see footnote below">†</sup>{% endif %}
+        {% if row.metric_description %}<div class="metric-description"><small>{{ row.metric_description }}</small></div>{% endif %}
       </td>
       <td>{{ '%.3f%%' % (row.mde_rel*100) if row.mde_rel is not none else '-' }}</td>
       <td>{{ '%.3f%s' % (row.mde_abs*abs_scale, abs_unit) if row.mde_abs is not none else '-' }}</td>

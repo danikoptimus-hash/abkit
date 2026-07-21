@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Typography, Tag, Space, Card, Alert, Row, Col } from 'antd'
+import { Typography, Tag, Space, Card, Alert, Row, Col, Popover } from 'antd'
+import { InfoCircleOutlined } from '@ant-design/icons'
 import { ForestPlotChart } from '../../charts/ForestPlotChart'
 import { DistributionChart } from '../../charts/DistributionChart'
 import { CumulativeLiftChart } from '../../charts/CumulativeLiftChart'
@@ -10,6 +11,7 @@ import { SegmentBreakdown } from '../../components/analysis/SegmentBreakdown'
 import { colors } from '../../theme/tokens'
 import type { AnalysisResultsOut, TestResultOut } from './analyzeTypes'
 import { resultsByMetric, verdict } from './analyzeTypes'
+import type { AnalyzeMetric } from './types'
 
 export const VERDICT_LABELS: Record<string, string> = {
   significant_positive: 'significant positive',
@@ -36,6 +38,7 @@ export function VerdictCards({
   selectedMetric,
   onSelectMetric,
   alpha = 0.05,
+  metrics,
 }: {
   results: TestResultOut[]
   selectedMetric?: string
@@ -44,7 +47,12 @@ export function VerdictCards({
   // config in scope (there are none left after item 2 — kept as a safety
   // net, not a real fallback path).
   alpha?: number
+  // Part 1: metric definitions — when a metric has a description, an info
+  // icon next to its name reveals it in a popover (Results tab). Optional so
+  // callers without config in scope (Analysis tab) simply omit it.
+  metrics?: AnalyzeMetric[]
 }) {
+  const descriptionByMetric = new Map((metrics ?? []).map((m) => [m.name, m.description]))
   const designed = results.filter((r) => r.is_designed_method)
   const byMetric = resultsByMetric(designed)
   const interactive = !!onSelectMetric
@@ -92,6 +100,20 @@ export function VerdictCards({
               >
                 <Space align="center" size={6}>
                   <Typography.Text strong>{metric}</Typography.Text>
+                  {descriptionByMetric.get(metric) && (
+                    <Popover
+                      content={
+                        <div style={{ maxWidth: 320, whiteSpace: 'pre-wrap' }}>{descriptionByMetric.get(metric)}</div>
+                      }
+                      title="Metric definition"
+                    >
+                      <InfoCircleOutlined
+                        aria-label={`metric-info-${metric}`}
+                        style={{ color: 'rgba(0,0,0,0.45)', cursor: 'help' }}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </Popover>
+                  )}
                   <Tag color={r.role === 'primary' ? 'blue' : 'default'} style={{ fontSize: 11, lineHeight: '16px', marginInlineEnd: 0 }}>
                     {ROLE_LABELS[r.role]}
                   </Tag>

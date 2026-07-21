@@ -30,7 +30,7 @@ const INITIAL_STATE: WizardState = {
   ],
   flowColumns: [],
   originalFlowGroupNames: [],
-  metrics: [{ id: nextId('metric'), name: '', type: 'continuous', role: 'primary', preCol: null, num: null, den: null }],
+  metrics: [{ id: nextId('metric'), name: '', type: 'continuous', role: 'primary', description: '', preCol: null, num: null, den: null }],
   strata: [],
   nanStrategy: 'separate_stratum',
   sizeMode: 'all',

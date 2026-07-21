@@ -66,7 +66,7 @@ export function ResultsSection({
             <LifecycleDates createdAt={createdAt} startedAt={startedAt} completedAt={completedAt} />
           </div>
 
-          <VerdictCards results={results.results} alpha={alpha} />
+          <VerdictCards results={results.results} alpha={alpha} metrics={metrics} />
 
           <Typography.Title level={4} style={{ marginTop: 8 }}>
             Detailed Results Table

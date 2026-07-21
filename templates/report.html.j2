@@ -128,6 +128,7 @@
 {% for section in metric_sections %}
 <div class="metric-block">
   <h2>{{ section.name }}</h2>
+  {% if section.description %}<p class="metric-description"><small>{{ section.description }}</small></p>{% endif %}
 
   <section id="section-forest">
     <h3>Forest plot: methods</h3>

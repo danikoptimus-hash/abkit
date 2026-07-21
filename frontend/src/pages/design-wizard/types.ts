@@ -8,6 +8,9 @@ export interface MetricFormRow {
   name: string
   type: 'continuous' | 'binary' | 'ratio'
   role: 'primary' | 'secondary'
+  // Optional free-text "what does this metric measure and how is it computed?"
+  // — stored additively in MetricConfig.description, prefilled on Redesign.
+  description: string
   preCol: string | null
   num: string | null
   den: string | null
@@ -152,6 +155,7 @@ export function metricsToApi(state: WizardState): MetricConfig[] {
       name: m.name.trim(),
       type: m.type,
       role: m.role,
+      description: m.description.trim() || undefined,
       pre_col: m.type === 'ratio' ? undefined : m.preCol ?? undefined,
       num: m.type === 'ratio' ? m.num ?? undefined : undefined,
       den: m.type === 'ratio' ? m.den ?? undefined : undefined,
@@ -355,6 +359,7 @@ export function metricsFromApi(metrics: MetricConfig[]): MetricFormRow[] {
     name: m.name,
     type: m.type as MetricFormRow['type'],
     role: m.role as MetricFormRow['role'],
+    description: m.description ?? '',
     preCol: m.pre_col ?? null,
     num: m.num ?? null,
     den: m.den ?? null,

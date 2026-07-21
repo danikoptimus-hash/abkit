@@ -92,10 +92,18 @@ export interface AnalyzeMetric {
   name: string
   type: 'continuous' | 'binary' | 'ratio'
   hasPreCol: boolean
+  // Optional free-text description — shown in an info popover next to the
+  // metric name on the Results tab (not inlined).
+  description?: string | null
 }
 
 export function analyzeMetricsFromConfig(config: Record<string, unknown>): AnalyzeMetric[] {
   const metrics =
-    (config.metrics as { name: string; type: 'continuous' | 'binary' | 'ratio'; pre_col?: string | null }[] | undefined) ?? []
-  return metrics.map((m) => ({ name: m.name, type: m.type, hasPreCol: !!m.pre_col }))
+    (config.metrics as {
+      name: string
+      type: 'continuous' | 'binary' | 'ratio'
+      pre_col?: string | null
+      description?: string | null
+    }[] | undefined) ?? []
+  return metrics.map((m) => ({ name: m.name, type: m.type, hasPreCol: !!m.pre_col, description: m.description }))
 }

@@ -62,7 +62,12 @@ def _design(app_client, name: str, dataset_id: str) -> dict:
                 "name": name,
                 "unit_col": "user_id",
                 "groups": {"control": 0.5, "treatment": 0.5},
-                "metrics": [{"name": "revenue", "type": "continuous", "role": "primary"}],
+                "metrics": [{
+                    "name": "revenue", "type": "continuous", "role": "primary",
+                    # Part 1: metric description must survive the export→import
+                    # round trip (the config deep-compare below asserts it).
+                    "description": "Total revenue per user in the test window.",
+                }],
                 "sample_size": 200,
                 "split_method": "simple",
                 "isolation": "off",

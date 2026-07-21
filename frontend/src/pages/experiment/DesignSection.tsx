@@ -17,6 +17,7 @@ interface RawMetric {
   name: string
   type: string
   role: string
+  description?: string | null
   pre_col?: string | null
   num?: string | null
   den?: string | null
@@ -122,7 +123,18 @@ function ConfigSummary({ config, computed }: { config: Record<string, unknown>; 
         </Descriptions.Item>
         <Descriptions.Item label="Metrics">
           <Space direction="vertical" size={2}>
-            {metrics.length ? metrics.map((m, i) => <div key={i}>{formatMetric(m)}</div>) : '—'}
+            {metrics.length
+              ? metrics.map((m, i) => (
+                  <div key={i}>
+                    <div>{formatMetric(m)}</div>
+                    {m.description && (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {m.description}
+                      </Typography.Text>
+                    )}
+                  </div>
+                ))
+              : '—'}
           </Space>
         </Descriptions.Item>
         <Descriptions.Item label="Split method">{String(config.split_method ?? '—')}</Descriptions.Item>

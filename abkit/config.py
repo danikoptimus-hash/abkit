@@ -13,6 +13,11 @@ class MetricConfig(BaseModel):
     name: str
     type: Literal["continuous", "binary", "ratio"]
     role: Literal["primary", "secondary"] = "primary"
+    description: str | None = None
+    """Опциональное свободное описание метрики ("что измеряет и как считается")
+    — чисто для отображения (Design tab, оба отчета, info-popover на Results),
+    на статистику не влияет. Аддитивно: старые эксперименты без описания —
+    None, не ошибка. Сиблинг к group_descriptions на уровне групп."""
     pre_col: str | None = None
     num: str | None = None
     den: str | None = None

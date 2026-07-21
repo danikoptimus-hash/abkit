@@ -30,7 +30,7 @@ _DESIGN_REPORT_SECTION_IDS = [
 ]
 
 
-def _demo_design(tmp_path, n=3000, strata=None, seed=1, group_descriptions=None):
+def _demo_design(tmp_path, n=3000, strata=None, seed=1, group_descriptions=None, metric_descriptions=None):
     rng = np.random.default_rng(seed)
     design_data = pd.DataFrame(
         {
@@ -48,7 +48,8 @@ def _demo_design(tmp_path, n=3000, strata=None, seed=1, group_descriptions=None)
         groups={"control": 0.5, "treatment": 0.5},
         group_descriptions=group_descriptions or {},
         metrics=[
-            MetricConfig(name="revenue", type="continuous"),
+            MetricConfig(name="revenue", type="continuous",
+                         description=(metric_descriptions or {}).get("revenue")),
             MetricConfig(name="clicks", type="binary", role="secondary"),
             MetricConfig(name="conv", type="ratio", num="orders", den="sessions"),
         ],
@@ -68,6 +69,21 @@ def test_design_report_written_and_has_all_sections(tmp_path):
     for section_id in _DESIGN_REPORT_SECTION_IDS:
         assert f'id="{section_id}"' in html, f"Секция {section_id} отсутствует в design_report.html"
     assert experiment.name in html
+
+
+def test_reports_carry_metric_description(tmp_path):
+    """Part 1: a metric's description is embedded in BOTH the design report and
+    the analysis report so the exported self-contained files carry the
+    definitions."""
+    desc = "Total revenue per user in the test window."
+    experiment = _demo_design(tmp_path, metric_descriptions={"revenue": desc})
+    design_html = (experiment.path / "design_report.html").read_text(encoding="utf-8")
+    assert desc in design_html
+
+    rng = np.random.default_rng(9)
+    post_data = _demo_post_data(experiment, len(experiment.assignments), rng)
+    analysis_html = experiment.analyze(post_data).report().read_text(encoding="utf-8")
+    assert desc in analysis_html
 
 
 def test_design_report_has_flow_images_anchor_comments_even_with_no_images(tmp_path):

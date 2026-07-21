@@ -256,6 +256,13 @@ export function Step2GroupsMetrics({ state, setState }: Props) {
               )}
             </div>
           )}
+          <Input.TextArea
+            placeholder="What does this metric measure and how is it computed? (optional)"
+            value={m.description ?? ''}
+            rows={2}
+            style={{ width: 460, marginTop: 8 }}
+            onChange={(e) => updateMetric(setState, m.id, { description: e.target.value })}
+          />
         </Card>
       ))}
       <Button
@@ -265,7 +272,7 @@ export function Step2GroupsMetrics({ state, setState }: Props) {
             ...prev,
             metrics: [
               ...prev.metrics,
-              { id: nextId('metric'), name: '', type: 'continuous', role: 'primary', preCol: null, num: null, den: null },
+              { id: nextId('metric'), name: '', type: 'continuous', role: 'primary', description: '', preCol: null, num: null, den: null },
             ],
           }))
         }

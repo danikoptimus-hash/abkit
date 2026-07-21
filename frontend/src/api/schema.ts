@@ -2652,6 +2652,8 @@ export interface components {
              * @enum {string}
              */
             role: "primary" | "secondary";
+            /** Description */
+            description?: string | null;
             /** Pre Col */
             pre_col?: string | null;
             /** Num */

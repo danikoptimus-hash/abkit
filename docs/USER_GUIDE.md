@@ -306,6 +306,10 @@ below for that flow instead). For ABSet split, pick the dataset from step 1
     value before the test started. Supplying it is what enables **CUPED**
     (variance reduction using the correlation between pre- and post-period
     values) for that metric.
+  - **Description** (optional) — a free-text note on what the metric measures
+    and how it's computed. It shows under the metric on the Design tab, in the
+    design and analysis reports (so the exported files carry the definitions),
+    and behind an info icon next to the metric name on the Results tab.
 
 **Variant flows (optional)** — a step right after Groups & Metrics for
 attaching visuals to each arm: one column per group (two groups split the row

@@ -267,6 +267,7 @@ def render_analysis_report(results: Any, context: dict[str, Any]) -> str:
                 name=metric_name,
                 role=role,
                 type=metric_config.type if metric_config else "continuous",
+                description=metric_config.description if metric_config else None,
                 forest_html=forest_html,
                 distribution_htmls=distribution_htmls,
                 segment_sections=segment_sections,
@@ -339,6 +340,7 @@ def render_design_report(
     config = experiment.config
     report = experiment.report
 
+    metric_descriptions = {m.name: m.description for m in experiment.config.metrics}
     power_rows = [
         dict(
             metric=name,
@@ -351,6 +353,7 @@ def render_design_report(
             rho=pr.rho,
             warnings=pr.warnings,
             metric_role=pr.metric_role,
+            metric_description=metric_descriptions.get(name),
         )
         for name, pr in report.power_results.items()
     ]
