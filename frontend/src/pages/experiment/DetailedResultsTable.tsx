@@ -4,6 +4,7 @@ import type { TestResultOut } from './analyzeTypes'
 import { verdict } from './analyzeTypes'
 import type { AnalyzeMetric } from './types'
 import { isManuallySelected } from './methodOptions'
+import { experimentDownloadName } from '../../lib/downloadName'
 
 const VERDICT_LABELS: Record<string, string> = {
   significant_positive: 'significant positive',
@@ -209,12 +210,15 @@ function HeaderWithTooltip({ label, tooltip }: { label: string; tooltip: string 
 }
 
 export function DetailedResultsTable({
-  results, controlName, correction, experimentName, showCorrection, alpha, metrics,
+  results, controlName, correction, experimentName, showCorrection, alpha, metrics, datasetSegment,
 }: {
   results: TestResultOut[]
   controlName: string
   correction: string
   experimentName: string
+  // Feature (dataset name in downloads): design-dataset segment for the CSV
+  // filename (<experiment>_<dataset>_detailed_results.csv). Optional.
+  datasetSegment?: string | null
   // false when the hypothesis family has only one member (one primary
   // metric × one treatment group) — p-value (adj.) then trivially equals
   // the raw p-value, so showing it would just duplicate the column
@@ -238,7 +242,9 @@ export function DetailedResultsTable({
     <div>
       <Button
         icon={<DownloadOutlined />}
-        onClick={() => downloadCsv(toCsv(rows), `${experimentName}_detailed_results.csv`)}
+        onClick={() =>
+          downloadCsv(toCsv(rows), experimentDownloadName(experimentName, datasetSegment, 'detailed_results.csv'))
+        }
         style={{ marginBottom: 12 }}
       >
         Export CSV

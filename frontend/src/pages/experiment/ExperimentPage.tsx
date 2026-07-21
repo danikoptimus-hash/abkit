@@ -539,6 +539,7 @@ export function ExperimentPage() {
                 onRemoveBlock={(id) => setDraftBlocks((prev) => prev.filter((x) => x.id !== id))}
                 alpha={Number(data.config.alpha ?? 0.05)}
                 metrics={analyzeMetricsFromConfig(data.config)}
+                datasetSegment={data.download_dataset_segment}
               />
             ),
           },
@@ -572,7 +573,11 @@ export function ExperimentPage() {
         }}
       />
 
-      <ExportExperimentModal name={exportTarget} onCancel={() => setExportTarget(null)} />
+      <ExportExperimentModal
+        name={exportTarget}
+        datasetSegment={data.download_dataset_segment}
+        onCancel={() => setExportTarget(null)}
+      />
     </div>
   )
 }

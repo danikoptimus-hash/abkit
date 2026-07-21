@@ -40,10 +40,13 @@ interface Props {
   // own method string, so it works identically right after a run and on a
   // cold Results-tab page load).
   metrics: AnalyzeMetric[]
+  // Feature (dataset name in downloads): design-dataset segment for the
+  // detailed-results CSV filename.
+  datasetSegment?: string | null
 }
 
 export function ResultsSection({
-  experimentName, familySize, createdAt, startedAt, completedAt, blocks, editing, onChangeBlock, onAddBlock, onRemoveBlock, alpha, metrics,
+  experimentName, familySize, createdAt, startedAt, completedAt, blocks, editing, onChangeBlock, onAddBlock, onRemoveBlock, alpha, metrics, datasetSegment,
 }: Props) {
   // Same query key as AnalyzeSection (Analysis tab) — shares the react-query
   // cache entry, so opening the Results tab directly (deep link/reload)
@@ -76,6 +79,7 @@ export function ResultsSection({
             controlName={Object.values(results.chart_data.metrics)[0]?.control_name ?? 'control'}
             correction={results.correction ?? 'none'}
             experimentName={experimentName}
+            datasetSegment={datasetSegment}
             showCorrection={familySize > 1}
             alpha={alpha}
             metrics={metrics}

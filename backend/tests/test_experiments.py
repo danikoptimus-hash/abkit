@@ -344,7 +344,10 @@ def test_samples_download_works_for_cyrillic_colon_experiment_name(app_client, t
 
     csv_resp = app_client.get(f"/api/v1/experiments/{encoded_name}/samples/control.csv")
     assert csv_resp.status_code == 200, csv_resp.text
-    assert _decoded_filename_star(csv_resp.headers["content-disposition"]) == "control.csv"
+    # Feature (dataset name in downloads): per-group CSVs now carry the
+    # <experiment>_<suffix> prefix too (no dataset linked here → no dataset
+    # segment). Was a bare "control.csv" before.
+    assert _decoded_filename_star(csv_resp.headers["content-disposition"]) == f"{name}_control.csv"
 
     missing_csv = app_client.get(f"/api/v1/experiments/{encoded_name}/samples/missing.csv")
     assert missing_csv.status_code == 404

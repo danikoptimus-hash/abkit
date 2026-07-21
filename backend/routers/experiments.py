@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from abkit.auth.guards import CurrentUser
 from abkit.dataset_files import read_dataset_file
+from abkit.download_names import build_experiment_download_name
 from abkit.db.repositories import AuditRepo, BlockRepo, DatasetRepo, ExperimentRepo, FlowImageRepo, UserRepo
 from abkit.db.store import DbExperimentStore
 from backend.deps import get_current_user, get_job_runner, require_min_role
@@ -100,6 +101,41 @@ def content_disposition(filename: str, *, disposition: str = "attachment") -> st
     RFC 5987's filename*= for everything modern (every current browser)."""
     encoded = quote(filename, safe="")
     return f'{disposition}; filename="{_ascii_fallback_filename(filename)}"; filename*=UTF-8\'\'{encoded}'
+
+
+def _download_dataset_segment(exp_row) -> str | None:
+    """The design dataset's name as a safe filename segment, for
+    <experiment>_<dataset>_<suffix> downloads — or None to keep the plain
+    <experiment>_<suffix> name. Resolved at request time (feature: dataset name
+    in downloads):
+
+    - ABSet / external-with-reference: the CURRENT name of the design (or
+      reference) dataset via the newest pre_design link (rename-aware). Both
+      split types write a pre_design link (backend/routers/design.py).
+    - deleted dataset → the frozen analysis_results.dataset_filename.
+    - external WITHOUT a reference dataset → None (no segment, no junk).
+    """
+    from abkit.db.repositories import DatasetRepo, ExperimentDatasetRepo, ResultRepo
+    from abkit.download_names import sanitize_dataset_segment
+
+    config = exp_row.config or {}
+    if config.get("split_source") == "external" and not config.get("reference_dataset_id"):
+        return None
+
+    pre_design = [
+        link for link in ExperimentDatasetRepo().list_for_experiment(exp_row.id)
+        if link.kind == "pre_design"
+    ]
+    if pre_design:
+        # list_for_experiment is created_at desc → [0] is the current link.
+        ds = DatasetRepo().get_by_id(pre_design[0].dataset_id)
+        if ds is not None:
+            return sanitize_dataset_segment(ds.filename)
+
+    result = ResultRepo().latest_for_experiment(exp_row.id)
+    if result is not None and result.dataset_filename:
+        return sanitize_dataset_segment(result.dataset_filename)
+    return None
 
 
 def _get_experiment_or_404(name: str):
@@ -373,6 +409,11 @@ def get_experiment(name: str, user: CurrentUser = Depends(get_current_user)) -> 
         tags=[_to_tag_out(t) for t in ExperimentTagRepo().list_for_experiment(exp.id)],
         folder_id=str(exp.folder_id) if exp.folder_id else None,
         folder_name=folder.name if folder else None,
+        # Feature (dataset name in downloads): the sanitized design-dataset
+        # segment, for the two client-side blob downloads (export zip, detailed
+        # results CSV) that build their own filename — same value the backend
+        # download endpoints resolve at request time.
+        download_dataset_segment=_download_dataset_segment(exp),
     )
 
 
@@ -447,11 +488,14 @@ def export_experiment(
     from abkit.jobs import run_export_experiment
 
     exp = _visible_or_404(_get_experiment_or_404(name), user)
-    filename, raw = run_export_experiment(user, exp.name, include_datasets=include_datasets)
+    _filename, raw = run_export_experiment(user, exp.name, include_datasets=include_datasets)
+    download_name = build_experiment_download_name(
+        exp.name, _download_dataset_segment(exp), "export.zip"
+    )
     return Response(
         content=raw,
         media_type="application/zip",
-        headers={"Content-Disposition": content_disposition(filename)},
+        headers={"Content-Disposition": content_disposition(download_name)},
     )
 
 
@@ -465,7 +509,7 @@ def get_report(
     the report is a self-contained single file either way (inlined logo/
     charts/CSS, no external requests), so the downloaded copy opens offline
     identically to the tab view."""
-    _get_experiment_or_404(name)
+    exp = _get_experiment_or_404(name)
     if report_name not in REPORT_FILENAMES:
         raise APIError(404, "not_found", f"Report '{report_name}' is not supported")
     report_path = _artifact_dir(name) / report_name
@@ -473,9 +517,12 @@ def get_report(
         raise APIError(404, "not_found", f"Report '{report_name}' has not been created yet")
     content = report_path.read_text(encoding="utf-8")
     if download:
+        download_name = build_experiment_download_name(
+            name, _download_dataset_segment(exp), report_name
+        )
         return Response(
             content=content, media_type="text/html",
-            headers={"Content-Disposition": content_disposition(f"{name}_{report_name}")},
+            headers={"Content-Disposition": content_disposition(download_name)},
         )
     return HTMLResponse(content=content)
 
@@ -521,9 +568,10 @@ def download_sample(name: str, filename: str, user: CurrentUser = Depends(get_cu
     group_df = assignments[assignments["group"] == group_name]
     if group_df.empty:
         raise APIError(404, "not_found", f"File '{filename}' not found")
+    download_name = build_experiment_download_name(name, _download_dataset_segment(exp), filename)
     return Response(
         content=_group_csv_bytes(group_df), media_type="text/csv",
-        headers={"Content-Disposition": content_disposition(filename)},
+        headers={"Content-Disposition": content_disposition(download_name)},
     )
 
 
@@ -538,9 +586,10 @@ def download_samples_zip(name: str, user: CurrentUser = Depends(get_current_user
         for group_name, group_df in assignments.groupby("group", observed=True):
             zf.writestr(f"{group_name}.csv", _group_csv_bytes(group_df))
     buffer.seek(0)
+    download_name = build_experiment_download_name(name, _download_dataset_segment(exp), "samples.zip")
     return StreamingResponse(
         buffer, media_type="application/zip",
-        headers={"Content-Disposition": content_disposition(f"{name}_samples.zip")},
+        headers={"Content-Disposition": content_disposition(download_name)},
     )
 
 

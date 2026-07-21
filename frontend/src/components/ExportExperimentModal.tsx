@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Modal, Typography, Checkbox, Alert } from 'antd'
 import { errorMessage } from '../api/client'
+import { experimentDownloadName } from '../lib/downloadName'
 import { StopClickPropagation } from './StopClickPropagation'
 
 interface Props {
   name: string | null
+  // Feature (dataset name in downloads): the experiment's design-dataset
+  // segment (ExperimentDetail.download_dataset_segment), null when there's
+  // none to name. Matches the backend's <experiment>_<dataset>_export.zip.
+  datasetSegment?: string | null
   onCancel: () => void
 }
 
@@ -16,7 +21,7 @@ interface Props {
 // экспорт умеет отказать (403 для viewer, 404 на невидимом черновике), а у
 // href-навигации отказ выглядит как "ничего не произошло" — тут же ошибку
 // показываем текстом в самой модалке.
-export function ExportExperimentModal({ name, onCancel }: Props) {
+export function ExportExperimentModal({ name, datasetSegment, onCancel }: Props) {
   const [includeDatasets, setIncludeDatasets] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,9 +60,10 @@ export function ExportExperimentModal({ name, onCancel }: Props) {
       const link = document.createElement('a')
       link.href = objectUrl
       // Имя задаем сами, а не парсим RFC 5987 filename* из
-      // Content-Disposition: сервер строит его по тому же правилу, а разбор
-      // заголовка на клиенте — лишний способ ошибиться.
-      link.download = `${name}_export.zip`
+      // Content-Disposition: сервер строит его по тому же правилу
+      // (build_experiment_download_name), а разбор заголовка на клиенте —
+      // лишний способ ошибиться. datasetSegment уже санитизирован бэком.
+      link.download = experimentDownloadName(name, datasetSegment, 'export.zip')
       link.click()
       URL.revokeObjectURL(objectUrl)
       onCancel()

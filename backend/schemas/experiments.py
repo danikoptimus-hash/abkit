@@ -87,6 +87,11 @@ class ExperimentDetail(BaseModel):
     tags: list[TagOut] = []
     folder_id: str | None = None
     folder_name: str | None = None
+    # Feature (dataset name in downloads): sanitized design/reference dataset
+    # name segment, or None. Used by the two client-side blob downloads (export
+    # zip, detailed results CSV) to match the <experiment>_<dataset>_<suffix>
+    # pattern the backend download endpoints produce.
+    download_dataset_segment: str | None = None
 
 
 class AuditEntryOut(BaseModel):

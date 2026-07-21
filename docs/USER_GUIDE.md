@@ -425,14 +425,20 @@ edit flow for it.
 metric (with and without CUPED, and ρ — the pre/post correlation CUPED
 exploits), and the split-quality checks below. Both the design report and the
 analysis report (Results tab) offer **View report** (opens in a new browser
-tab) and **Download report** (saves it as `<experiment>_design_report.html` /
-`<experiment>_report.html`) — either way it's the same self-contained file
-(charts, logo, and CSS all inlined), so the downloaded copy opens correctly
-offline, with no server needed. The Design tab also offers the raw split
-itself: a **Download &lt;group&gt;.csv** button per group (using its real
-name, e.g. "Download control.csv" / "Download treatment.csv") so you can hand
-just the treatment file to whoever runs the rollout without control users
-mixed in, plus **Download Samples (ZIP)** for all groups together.
+tab) and **Download report** (saves it as
+`<experiment>_<dataset>_design_report.html` /
+`<experiment>_<dataset>_report.html`, where `<dataset>` is the name of the
+dataset used to design the experiment — a linked reference dataset for external
+splits, or nothing when there is none) — either way it's the same
+self-contained file (charts, logo, and CSS all inlined), so the downloaded copy
+opens correctly offline, with no server needed. Every download the experiment
+offers (reports, the samples archive and per-group CSVs, and the experiment
+export zip) follows the same `<experiment>_<dataset>_…` naming. The Design tab
+also offers the raw split itself: a **Download &lt;group&gt;.csv** button per
+group (using its real name, e.g. "Download control.csv" / "Download
+treatment.csv") so you can hand just the treatment file to whoever runs the
+rollout without control users mixed in, plus **Download Samples (ZIP)** for all
+groups together.
 
 ### 3. Sample sizes and split checks
 

@@ -2422,6 +2422,8 @@ export interface components {
             folder_id?: string | null;
             /** Folder Name */
             folder_name?: string | null;
+            /** Download Dataset Segment */
+            download_dataset_segment?: string | null;
         };
         /** ExperimentPropertiesOut */
         ExperimentPropertiesOut: {
